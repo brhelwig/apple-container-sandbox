@@ -43,9 +43,11 @@ WORKDIR $HOME
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-# 6. packages.toml -> brew taps (declaring a tap trusts it, so its casks install).
+# 6. packages.toml -> brew taps. Trust each tap so its casks can install; trust
+#    is a no-op/irrelevant for formula-only taps, so a failure there is ignored
+#    (untrusted casks still fail at install time, so this doesn't weaken safety).
 RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("taps",[])))')" \
-    && for t in $taps; do brew tap "$t" && brew trust "$t"; done
+    && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
 
 # 7. packages.toml -> brew formulae.
 RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("formulae",[])))')" \
