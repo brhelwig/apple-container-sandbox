@@ -7,7 +7,7 @@ USERNAME="${SANDBOX_USER:-${USER:-dev}}"
 HASH="$("$REPO/bin/sandbox-src-hash")"
 IMAGE="${IMAGE:-sandbox:$HASH}"
 
-if container images list 2>/dev/null | grep -q "sandbox.*$HASH"; then
+if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
     echo "$IMAGE (already built)"
     exit 0
 fi
