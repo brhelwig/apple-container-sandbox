@@ -26,4 +26,18 @@ container build \
 # auto-starts it again on the next build.
 container builder stop >/dev/null 2>&1 || true
 
+# Prune superseded sandbox images: delete any sandbox:<tag> that isn't the image
+# we just built and isn't in use by a running container (so a still-running
+# stale sandbox keeps its image until it's relaunched).
+{
+    in_use="$(container ls 2>/dev/null | awk 'NR>1 {print $2}')"
+    container image ls 2>/dev/null | awk '/^sandbox /{print $2}' | while read -r tag; do
+        [ "$tag" = "$HASH" ] && continue
+        ref="sandbox:$tag"
+        printf '%s\n' "$in_use" | grep -qxF "$ref" && continue
+        echo "pruning $ref"
+        container image delete "$ref" >/dev/null 2>&1 || true
+    done
+} >&2
+
 echo "$IMAGE"
