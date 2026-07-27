@@ -20,21 +20,31 @@ only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
 }
 
-# launch <name>: attach if the sandbox is already running, else (re)create it.
+# launch <name>: ensure the current image exists, then attach to a running
+# up-to-date sandbox, or (re)create the container on the current image. The home
+# dir persists across recreation, so replacing a stale container loses nothing.
 launch() {
-    local name="$1" home image
+    local name="$1" home image running_image
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
-    # Already running? Re-attach into its named zellij session.
-    if container ls --quiet 2>/dev/null | grep -qx "$name"; then
-        exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
+    # Build the image if this source hash isn't built yet; capture its ref.
+    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
+
+    # Image the container with this name is currently running (empty if none).
+    running_image="$(container ls 2>/dev/null | awk -v n="$name" '$1 == n {print $2}')"
+
+    if [ -n "$running_image" ]; then
+        if [ "$running_image" = "$image" ]; then
+            # Running the current image — re-attach into its zellij session.
+            exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
+        fi
+        # Running a stale image — stop it so we recreate on the current image.
+        container stop "$name" >/dev/null 2>&1 || true
     fi
 
-    # A leftover stopped container with this name would block --name; drop it.
+    # Remove any leftover container with this name, then run fresh.
     container delete --force "$name" >/dev/null 2>&1 || true
-
-    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
     container run --rm --interactive --tty \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
