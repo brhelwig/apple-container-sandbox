@@ -105,7 +105,7 @@ main() {
         *) create_and_launch "$1"; return $? ;;
     esac
 
-    command -v gum >/dev/null 2>&1 || { echo "Install gum (brew install gum) for the menu, or run: sandbox <name>" >&2; return 1; }
+    ensure_gum || return 1
 
     local names choice
     local NEW="＋ New sandbox" REN="✎ Rename…" DEL="🗑 Delete…"
