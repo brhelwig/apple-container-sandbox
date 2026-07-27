@@ -61,6 +61,43 @@ create_and_launch() {
     launch "$name"
 }
 
+# remove_container <name>: stop and delete the container if it exists (no-op otherwise).
+remove_container() {
+    container stop "$1" >/dev/null 2>&1 || true
+    container delete --force "$1" >/dev/null 2>&1 || true
+}
+
+# delete_sandbox: pick a sandbox, confirm, then remove its container and home dir.
+delete_sandbox() {
+    local name
+    name="$(list_sandboxes | gum choose --header 'Delete which sandbox?')" || return 0
+    [ -n "$name" ] || return 0
+    gum confirm "Delete '$name' and its home dir ($(sandbox_home_path "$name"))? Cannot be undone." || return 0
+    remove_container "$name"
+    rm -rf "$(sandbox_home_path "$name")"
+    echo "Deleted sandbox '$name'."
+}
+
+# rename_sandbox: pick a sandbox, enter a new name, move its home dir.
+rename_sandbox() {
+    local old new
+    old="$(list_sandboxes | gum choose --header 'Rename which sandbox?')" || return 0
+    [ -n "$old" ] || return 0
+    new="$(gum input --prompt "Rename '$old' to: " --placeholder 'new-name')" || return 0
+    [ -n "$new" ] || return 0
+    if ! validate_name "$new"; then
+        echo "Invalid name: '$new' (use letters, digits, '-', '_'; no leading dot)." >&2
+        return 1
+    fi
+    if [ -e "$(sandbox_home_path "$new")" ]; then
+        echo "'$new' already exists." >&2
+        return 1
+    fi
+    remove_container "$old"
+    mv "$(sandbox_home_path "$old")" "$(sandbox_home_path "$new")"
+    echo "Renamed '$old' -> '$new'."
+}
+
 main() {
     case "${1:-}" in
         -h|--help) usage; return 0 ;;
@@ -71,16 +108,19 @@ main() {
     command -v gum >/dev/null 2>&1 || { echo "Install gum (brew install gum) for the menu, or run: sandbox <name>" >&2; return 1; }
 
     local names choice
+    local NEW="＋ New sandbox" REN="✎ Rename…" DEL="🗑 Delete…"
     names="$(list_sandboxes)"
-    choice="$(printf '%s\n＋ New sandbox\n' "$names" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
+    choice="$(printf '%s\n' "$names" "$NEW" "$REN" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
 
-    if [ "$choice" = "＋ New sandbox" ]; then
-        local name
-        name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
-        create_and_launch "$name"
-    else
-        launch "$choice"
-    fi
+    case "$choice" in
+        "$NEW")
+            local name
+            name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
+            create_and_launch "$name" ;;
+        "$REN") rename_sandbox ;;
+        "$DEL") delete_sandbox ;;
+        *) launch "$choice" ;;
+    esac
 }
 
 main "$@"
