@@ -75,14 +75,18 @@ USER root
 RUN HOME=/etc/skel RUNZSH=no CHSH=no \
         sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
     && printf 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"\n' | tee -a /etc/skel/.zshrc /etc/skel/.bashrc \
+    && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
-# 11. Entry points.
+# 11. Entry points + sandbox helpers.
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup
+COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
+COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup /usr/local/bin/sandbox-zellij
 
 USER $USERNAME
 WORKDIR $HOME
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["zellij"]
+# Attach to (or create) a zellij session named after the sandbox.
+CMD ["/usr/local/bin/sandbox-zellij"]

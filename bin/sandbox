@@ -26,9 +26,9 @@ launch() {
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
-    # Already running? Re-attach a shell into the live sandbox.
+    # Already running? Re-attach into its named zellij session.
     if container ls --quiet 2>/dev/null | grep -qx "$name"; then
-        exec container exec --interactive --tty "$name" zsh -l
+        exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
     fi
 
     # A leftover stopped container with this name would block --name; drop it.
