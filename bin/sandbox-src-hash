@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Print a stable hash of the image sources (image/ + packages.toml).
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# List image files deterministically, hash their contents + paths together
+# with packages.toml so any change to either produces a new hash.
+{
+  find "$REPO/image" -type f -print0 | sort -z | xargs -0 shasum
+  shasum "$REPO/packages.toml"
+} | shasum | awk '{print $1}'
