@@ -3,6 +3,9 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck source=lib.sh
+. "$REPO/bin/lib.sh"
+
 USERNAME="${SANDBOX_USER:-${USER:-dev}}"
 HASH="$("$REPO/bin/sandbox-src-hash")"
 IMAGE="${IMAGE:-sandbox:$HASH}"
@@ -15,12 +18,40 @@ if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
     exit 0
 fi
 
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+
+# Keep a copy of the build output so a failure can be matched against causes
+# that are worth acting on.
+build() {
+    container build \
+        --build-arg "USERNAME=$USERNAME" \
+        --tag "$IMAGE" \
+        --file "$REPO/image/Dockerfile" \
+        "$REPO" 2>&1 | tee "$LOG" >&2
+    return "${PIPESTATUS[0]}"
+}
+
 echo "Building $IMAGE ..." >&2
-container build \
-    --build-arg "USERNAME=$USERNAME" \
-    --tag "$IMAGE" \
-    --file "$REPO/image/Dockerfile" \
-    "$REPO" >&2
+if ! build; then
+    rosetta_bootstrap_failure "$LOG" || exit 1
+
+    echo >&2
+    echo "The image builder wants Rosetta, and it isn't installed on this Mac." >&2
+    if confirm 'Install Rosetta now? (runs: sudo softwareupdate --install-rosetta --agree-to-license)' \
+        && sudo /usr/sbin/softwareupdate --install-rosetta --agree-to-license >&2; then
+        build || exit 1
+    else
+        cat >&2 <<'EOF'
+Not installed. Either install it later:
+    sudo softwareupdate --install-rosetta --agree-to-license
+or keep builds arm64-only and skip Rosetta, in ~/.config/container/config.toml:
+    [build]
+    rosetta = false
+EOF
+        exit 1
+    fi
+fi
 
 # Don't leave the (machine-wide) builder running idle; `container build`
 # auto-starts it again on the next build.
