@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# shellcheck source=lib.sh
+. "$REPO/bin/lib.sh"
+
+USERNAME="${SANDBOX_USER:-${USER:-dev}}"
+
+usage() {
+    cat <<EOF
+sandbox — ad-hoc Linux sandboxes on Apple Container
+
+  sandbox            Open the menu (launch, or create/rename/delete).
+  sandbox <name>     Launch <name> (offers to create it if new).
+  sandbox --help     This help.
+
+Homes live under \$SANDBOX_HOMES (default ~/Sandboxes). The container mounts
+only its home dir; drop files into ~/Sandboxes/<name> in Finder.
+EOF
+}
+
+# launch <name>: build image if needed, ensure home dir, run the container.
+launch() {
+    local name="$1" home image
+    home="$(sandbox_home_path "$name")"
+    mkdir -p "$home"
+    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
+
+    container run --rm --interactive --tty \
+        --name "$name" \
+        --volume "$home:/home/$USERNAME" \
+        "$image"
+}
+
+# create_and_launch <name>: validate, then launch.
+create_and_launch() {
+    local name="$1"
+    if ! validate_name "$name"; then
+        echo "Invalid name: '$name' (use letters, digits, '-', '_'; no leading dot)." >&2
+        return 1
+    fi
+    launch "$name"
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help) usage; return 0 ;;
+        "") ;;  # fall through to menu
+        *) create_and_launch "$1"; return $? ;;
+    esac
+
+    command -v gum >/dev/null 2>&1 || { echo "Install gum (brew install gum) for the menu, or run: sandbox <name>" >&2; return 1; }
+
+    local names choice
+    names="$(list_sandboxes)"
+    choice="$(printf '%s\n＋ New sandbox\n' "$names" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
+
+    if [ "$choice" = "＋ New sandbox" ]; then
+        local name
+        name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
+        create_and_launch "$name"
+    else
+        launch "$choice"
+    fi
+}
+
+main "$@"
