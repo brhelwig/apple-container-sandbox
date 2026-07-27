@@ -20,13 +20,21 @@ only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
 }
 
-# launch <name>: build image if needed, ensure home dir, run the container.
+# launch <name>: attach if the sandbox is already running, else (re)create it.
 launch() {
     local name="$1" home image
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
-    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
 
+    # Already running? Re-attach a shell into the live sandbox.
+    if container ls --quiet 2>/dev/null | grep -qx "$name"; then
+        exec container exec --interactive --tty "$name" zsh -l
+    fi
+
+    # A leftover stopped container with this name would block --name; drop it.
+    container delete --force "$name" >/dev/null 2>&1 || true
+
+    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
     container run --rm --interactive --tty \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
