@@ -130,6 +130,24 @@ run_build 9 0 'Error: no space left on device'; status=$?
 ok '[ "$status" -ne 0 ]'                        'other failure: fails'
 ok '[ ! -e "$STUB/gum.log" ]'                   'other failure: no prompt'
 
+# bin/sandbox launch, against a stub that records how the container is run.
+LSTUB="$TMP/launchstub"
+mkdir -p "$LSTUB"
+cat > "$LSTUB/container" <<'STUBEOF'
+#!/bin/sh
+case "$1" in
+    image) echo "sandbox $SANDBOX_HASH" ;;
+    ls) echo "NAME IMAGE" ;;
+    run) echo "$@" >> "$LSTUB/run.log" ;;
+esac
+STUBEOF
+chmod +x "$LSTUB/container"
+
+LSTUB="$LSTUB" SANDBOX_HASH="$(bash "$REPOCOPY/bin/sandbox-src-hash")" \
+    PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" alpha >/dev/null 2>&1
+ok 'grep -q -- "--init" "$LSTUB/run.log"'       'launch: reaps orphans with --init'
+ok 'grep -q -- "--name alpha" "$LSTUB/run.log"' 'launch: names the container'
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

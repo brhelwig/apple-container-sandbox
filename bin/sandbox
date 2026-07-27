@@ -43,9 +43,10 @@ launch() {
         container stop "$name" >/dev/null 2>&1 || true
     fi
 
-    # Remove any leftover container with this name, then run fresh.
+    # Remove any leftover container with this name, then run fresh. --init keeps
+    # an init above zellij to reap the orphans that reparent onto PID 1.
     container delete --force "$name" >/dev/null 2>&1 || true
-    container run --rm --interactive --tty \
+    container run --rm --interactive --tty --init \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
         "$image"
