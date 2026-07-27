@@ -4,10 +4,10 @@ packages = ["podman"]
 [brew]
 taps = ["terraform-linters/tap", "hashicorp/tap"]
 formulae = [
-  "ansible", "awscli", "cloudflare-wrangler", "gh", "go", "gum", "hadolint",
-  "hashicorp/tap/terraform", "helm", "helmfile", "htop", "jq", "k9s", "kubectl",
-  "kubectx", "kustomize", "lazygit", "lazysql", "mosh", "nano", "node",
-  "pre-commit", "sops", "sqlite", "uv", "watch", "yq", "zellij", "zstd",
+  "ansible", "awscli", "azure-cli", "cloudflare-wrangler", "gh", "go", "gum",
+  "hadolint", "hashicorp/tap/terraform", "helm", "helmfile", "htop", "jq", "k9s",
+  "kubectl", "kubectx", "kustomize", "lazygit", "lazysql", "mosh", "nano",
+  "node", "pre-commit", "sops", "sqlite", "uv", "watch", "yq", "zellij", "zstd",
 ]
 # Casks from a declared tap are trusted automatically (see [brew].taps).
 casks = ["claude-code@latest", "gcloud-cli", "tflint"]
