@@ -13,8 +13,9 @@ git clone https://github.com/brhelwig/apple-container-sandbox.git ~/.sandbox
 
 `install.sh` creates `~/Sandboxes`, seeds a `packages.toml` from
 `packages.toml.example` (only if you don't have one yet), and prints the line to
-add `~/.sandbox/bin` to your PATH. `gum` is required for the menu
-(`brew install gum`).
+add `~/.sandbox/bin` to your PATH. The menu needs `gum`; it offers to
+`brew install gum` the first time you open it without one. `sandbox <name>`
+skips the menu and doesn't need `gum` at all.
 
 ## Usage
 
