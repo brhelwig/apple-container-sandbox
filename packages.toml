@@ -1,0 +1,16 @@
+[apt]
+packages = ["podman"]
+
+[brew]
+taps = ["terraform-linters/tap"]
+formulae = [
+  "ansible", "awscli", "cloudflare-wrangler", "gh", "go", "gum", "hadolint",
+  "helm", "helmfile", "htop", "jq", "k9s", "kubectl", "kubectx", "kustomize",
+  "lazygit", "lazysql", "mosh", "nano", "node", "pre-commit", "sops", "sqlite",
+  "tflint", "uv", "watch", "yq", "zellij", "zstd",
+]
+casks = ["claude-code@latest", "gcloud-cli"]
+
+[post_install]
+# Shell commands run in order after all installs, baked into the image.
+commands = []
