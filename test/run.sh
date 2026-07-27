@@ -37,6 +37,43 @@ echo 'error: no space left on device' > "$TMP/other.log"
 ok 'rosetta_bootstrap_failure "$TMP/rosetta.log"' 'spots the Rosetta failure'
 no 'rosetta_bootstrap_failure "$TMP/other.log"' 'ignores other failures'
 
+# ensure_gum, against a PATH holding only the stubs each case asks for.
+GSTUB="$TMP/gumstub"
+
+# run_ensure_gum <gum?> <brew?> <answer> <install-works?>: each argument yes/no.
+# Stderr lands in $TMP/err.
+run_ensure_gum() {
+    rm -rf "$GSTUB"
+    mkdir -p "$GSTUB"
+    [ "$1" = yes ] && { printf '#!/bin/sh\n' > "$GSTUB/gum"; chmod +x "$GSTUB/gum"; }
+    if [ "$2" = yes ]; then
+        {
+            # The stub runs under the test's stripped PATH, so it restores one.
+            printf '#!/bin/sh\nPATH=/usr/bin:/bin\n'
+            printf 'echo "$@" >> %s/brew.log\n' "$GSTUB"
+            [ "$4" = yes ] && printf 'printf "#!/bin/sh\\n" > %s/gum && chmod +x %s/gum\n' "$GSTUB" "$GSTUB"
+        } > "$GSTUB/brew"
+        chmod +x "$GSTUB/brew"
+    fi
+    local answer="$3"
+    (
+        confirm() { [ "$answer" = yes ]; }
+        PATH="$GSTUB" ensure_gum
+    ) 2>"$TMP/err"
+}
+
+ok 'run_ensure_gum yes no no no'            'gum present: nothing to do'
+ok '[ ! -e "$GSTUB/brew.log" ]'             'gum present: no install attempted'
+no 'run_ensure_gum no no yes yes'           'no brew: fails'
+ok 'grep -q brew.sh "$TMP/err"'             'no brew: points at Homebrew'
+no 'run_ensure_gum no yes no yes'           'declined: fails'
+ok '[ ! -e "$GSTUB/brew.log" ]'             'declined: installs nothing'
+ok 'grep -q "brew install gum" "$TMP/err"'  'declined: names the install command'
+ok 'run_ensure_gum no yes yes yes'          'consent: gum is usable afterwards'
+ok 'grep -q "^install gum$" "$GSTUB/brew.log"' 'consent: runs brew install gum'
+no 'run_ensure_gum no yes yes no'           'install without gum on PATH: fails'
+ok 'grep -q "still isn.t on your PATH" "$TMP/err"' 'install without gum on PATH: says so'
+
 # bin/sandbox-build, driven against stubs. The repo is copied so the build sees
 # a packages.toml (untracked in a real checkout).
 REPOCOPY="$TMP/repo"

@@ -11,7 +11,8 @@ git clone https://github.com/brhelwig/apple-container-sandbox.git ~/.sandbox
 ~/.sandbox/install.sh   # creates ~/Sandboxes, prints the PATH line to add
 ```
 
-`gum` is required for the menu (`brew install gum`).
+The menu needs `gum`; it offers to `brew install gum` the first time you open it
+without one. `sandbox <name>` skips the menu and doesn't need `gum` at all.
 
 ## Usage
 
