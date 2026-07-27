@@ -7,15 +7,19 @@ USERNAME="${SANDBOX_USER:-${USER:-dev}}"
 HASH="$("$REPO/bin/sandbox-src-hash")"
 IMAGE="${IMAGE:-sandbox:$HASH}"
 
+# stdout carries ONLY the image reference (callers capture it); all status and
+# build progress go to stderr.
 if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
-    echo "$IMAGE (already built)"
+    echo "$IMAGE already built." >&2
+    echo "$IMAGE"
     exit 0
 fi
 
+echo "Building $IMAGE ..." >&2
 container build \
     --build-arg "USERNAME=$USERNAME" \
     --tag "$IMAGE" \
     --file "$REPO/image/Dockerfile" \
-    "$REPO"
+    "$REPO" >&2
 
 echo "$IMAGE"
