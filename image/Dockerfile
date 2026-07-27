@@ -43,9 +43,9 @@ WORKDIR $HOME
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-# 6. packages.toml -> brew taps.
+# 6. packages.toml -> brew taps (declaring a tap trusts it, so its casks install).
 RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("taps",[])))')" \
-    && for t in $taps; do brew tap "$t"; done
+    && for t in $taps; do brew tap "$t" && brew trust "$t"; done
 
 # 7. packages.toml -> brew formulae.
 RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("formulae",[])))')" \
