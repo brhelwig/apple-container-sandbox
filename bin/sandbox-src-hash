@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Print a stable hash of the image sources (image/ + packages.toml).
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$REPO"
+
+# Hash file contents + RELATIVE paths (run from the repo root) so the same
+# sources yield the same hash regardless of where the repo is checked out.
+{
+  find image -type f -print0 | sort -z | xargs -0 shasum
+  shasum packages.toml
+} | shasum | awk '{print $1}'

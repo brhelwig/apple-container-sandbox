@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Build the shared sandbox image if the current source hash isn't built yet.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+USERNAME="${SANDBOX_USER:-${USER:-dev}}"
+HASH="$("$REPO/bin/sandbox-src-hash")"
+IMAGE="${IMAGE:-sandbox:$HASH}"
+
+# stdout carries ONLY the image reference (callers capture it); all status and
+# build progress go to stderr.
+if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
+    echo "$IMAGE already built." >&2
+    echo "$IMAGE"
+    exit 0
+fi
+
+echo "Building $IMAGE ..." >&2
+container build \
+    --build-arg "USERNAME=$USERNAME" \
+    --tag "$IMAGE" \
+    --file "$REPO/image/Dockerfile" \
+    "$REPO" >&2
+
+# Don't leave the (machine-wide) builder running idle; `container build`
+# auto-starts it again on the next build.
+container builder stop >/dev/null 2>&1 || true
+
+echo "$IMAGE"

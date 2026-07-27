@@ -1,0 +1,6 @@
+# Editor / OS cruft
+.DS_Store
+
+# The user's editable package list; seeded from packages.toml.example by
+# install.sh. Untracked so local edits never conflict with `git pull`.
+packages.toml
