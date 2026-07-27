@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Build the shared sandbox image if the current source hash isn't built yet.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+USERNAME="${SANDBOX_USER:-${USER:-dev}}"
+HASH="$("$REPO/bin/sandbox-src-hash")"
+IMAGE="${IMAGE:-sandbox:$HASH}"
+
+if container images list 2>/dev/null | grep -q "sandbox.*$HASH"; then
+    echo "$IMAGE (already built)"
+    exit 0
+fi
+
+container build \
+    --build-arg "USERNAME=$USERNAME" \
+    --tag "$IMAGE" \
+    --file "$REPO/image/Dockerfile" \
+    "$REPO"
+
+echo "$IMAGE"
