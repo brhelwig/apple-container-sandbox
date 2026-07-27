@@ -51,9 +51,20 @@ RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/pa
 RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("formulae",[])))')" \
     && if [ -n "$formulae" ]; then brew install $formulae; fi
 
-# 8. packages.toml -> brew casks.
+# 8. packages.toml -> brew casks. Cask linking can emit a benign trailing
+#    "Broken pipe" (non-zero exit) in a non-TTY build even though the cask
+#    installed; tolerate that when the cask actually linked / is listed.
 RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("casks",[])))')" \
-    && for c in $casks; do brew install --cask "$c"; done
+    && for c in $casks; do \
+         out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
+         printf '%s\n' "$out"; \
+         [ "$rc" -eq 0 ] && continue; \
+         if brew list --cask "$c" >/dev/null 2>&1 || printf '%s' "$out" | grep -q 'Linking Binary'; then \
+           echo "note: cask $c installed (tolerating exit $rc)"; \
+         else \
+           echo "ERROR: cask $c failed to install" >&2; exit 1; \
+         fi; \
+       done
 
 # 9. packages.toml -> post_install commands (fail the build on any error).
 RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/packages.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
