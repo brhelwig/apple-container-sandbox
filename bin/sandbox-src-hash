@@ -3,10 +3,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$REPO"
 
-# List image files deterministically, hash their contents + paths together
-# with packages.toml so any change to either produces a new hash.
+# Hash file contents + RELATIVE paths (run from the repo root) so the same
+# sources yield the same hash regardless of where the repo is checked out.
 {
-  find "$REPO/image" -type f -print0 | sort -z | xargs -0 shasum
-  shasum "$REPO/packages.toml"
+  find image -type f -print0 | sort -z | xargs -0 shasum
+  shasum packages.toml
 } | shasum | awk '{print $1}'
