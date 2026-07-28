@@ -45,9 +45,15 @@ launch() {
 
     # Remove any leftover container with this name, then run fresh.
     container delete --force "$name" >/dev/null 2>&1 || true
+
+    local -a resource_args=()
+    while IFS= read -r line; do resource_args+=("$line"); done \
+        < <(sandbox_resource_args "$REPO/config.toml")
+
     container run --rm --interactive --tty \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
+        ${resource_args[@]+"${resource_args[@]}"} \
         "$image"
 }
 

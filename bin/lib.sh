@@ -16,6 +16,23 @@ sandbox_home_path() {
     printf '%s/%s\n' "$SANDBOX_HOMES" "$1"
 }
 
+# sandbox_resource_args <config>: print the `container run` resource flags
+# (--memory / --cpus) declared in [resources], one token per line. Silent if
+# the file, the section, or a value is absent/empty.
+sandbox_resource_args() {
+    [ -r "$1" ] || return 0
+    python3 - "$1" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    res = tomllib.load(f).get("resources", {})
+for flag, key in (("--memory", "memory"), ("--cpus", "cpus")):
+    val = res.get(key)
+    if val not in (None, ""):
+        print(flag)
+        print(val)
+PY
+}
+
 # confirm <prompt>: ask for approval; 0 if approved. No terminal means no.
 confirm() {
     if command -v gum >/dev/null 2>&1; then

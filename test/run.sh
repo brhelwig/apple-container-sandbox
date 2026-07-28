@@ -26,6 +26,18 @@ no 'validate_name ""'             'rejects empty'
 # sandbox_home_path
 ok '[ "$(sandbox_home_path myproject)" = "$SANDBOX_HOMES/myproject" ]' 'home path'
 
+# sandbox_resource_args
+RES="$TMP/res.toml"
+printf '[resources]\nmemory = "4G"\ncpus = 4\n' > "$RES"
+ok '[ "$(sandbox_resource_args "$RES" | tr "\n" " ")" = "--memory 4G --cpus 4 " ]' 'resource args: memory and cpus'
+printf '[resources]\nmemory = "2G"\n' > "$RES"
+ok '[ "$(sandbox_resource_args "$RES" | tr "\n" " ")" = "--memory 2G " ]' 'resource args: memory only'
+printf '[resources]\nmemory = ""\ncpus = ""\n' > "$RES"
+ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: empty values -> none'
+printf '[apt]\npackages = []\n' > "$RES"
+ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
+ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
+
 # list_sandboxes
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
 ok '[ "$(list_sandboxes | tr "\n" " ")" = "alpha beta " ]' 'lists sorted dirs'
@@ -75,12 +87,12 @@ no 'run_ensure_gum no yes yes no'           'install without gum on PATH: fails'
 ok 'grep -q "still isn.t on your PATH" "$TMP/err"' 'install without gum on PATH: says so'
 
 # bin/sandbox-build, driven against stubs. The repo is copied so the build sees
-# a packages.toml (untracked in a real checkout).
+# a config.toml (untracked in a real checkout).
 REPOCOPY="$TMP/repo"
 STUB="$TMP/stub"
 mkdir -p "$REPOCOPY" "$STUB"
 cp -R "$DIR/../bin" "$DIR/../image" "$REPOCOPY/"
-cp "$DIR/../packages.toml.example" "$REPOCOPY/packages.toml"
+cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
 cat > "$STUB/container" <<'STUBEOF'
 #!/usr/bin/env bash

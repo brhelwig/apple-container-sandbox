@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-# 1. Base toolchain (python3 is needed to parse packages.toml).
+# 1. Base toolchain (python3 is needed to parse config.toml).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl file git git-lfs gnupg \
         locales procps python3 sudo unzip zsh \
@@ -15,9 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. packages.toml -> apt packages (root).
-COPY packages.toml /tmp/packages.toml
-RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("apt",{}).get("packages",[])))')" \
+# 2. config.toml -> apt packages (root).
+COPY config.toml /tmp/config.toml
+RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
     && if [ -n "$pkgs" ]; then apt-get update \
        && apt-get install -y --no-install-recommends $pkgs \
        && rm -rf /var/lib/apt/lists/*; fi
@@ -43,20 +43,20 @@ WORKDIR $HOME
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-# 6. packages.toml -> brew taps. Trust each tap so its casks can install; trust
+# 6. config.toml -> brew taps. Trust each tap so its casks can install; trust
 #    is a no-op/irrelevant for formula-only taps, so a failure there is ignored
 #    (untrusted casks still fail at install time, so this doesn't weaken safety).
-RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("taps",[])))')" \
+RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
     && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
 
-# 7. packages.toml -> brew formulae.
-RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("formulae",[])))')" \
+# 7. config.toml -> brew formulae.
+RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("formulae",[])))')" \
     && if [ -n "$formulae" ]; then brew install $formulae; fi
 
-# 8. packages.toml -> brew casks. Cask linking can emit a benign trailing
+# 8. config.toml -> brew casks. Cask linking can emit a benign trailing
 #    "Broken pipe" (non-zero exit) in a non-TTY build even though the cask
 #    installed; tolerate that when the cask actually linked / is listed.
-RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/packages.toml","rb")).get("brew",{}).get("casks",[])))')" \
+RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("casks",[])))')" \
     && for c in $casks; do \
          out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
          printf '%s\n' "$out"; \
@@ -68,8 +68,8 @@ RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/p
          fi; \
        done
 
-# 9. packages.toml -> post_install commands (fail the build on any error).
-RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/packages.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
+# 9. config.toml -> post_install commands (fail the build on any error).
+RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
     && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
 
 # 10. Shell seed into /etc/skel (root); entrypoint copies it into a fresh home.
