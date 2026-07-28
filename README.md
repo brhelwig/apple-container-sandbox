@@ -11,8 +11,8 @@ git clone https://github.com/brhelwig/apple-container-sandbox.git ~/.sandbox
 ~/.sandbox/install.sh
 ```
 
-`install.sh` creates `~/Sandboxes`, seeds a `packages.toml` from
-`packages.toml.example` (only if you don't have one yet), and prints the line to
+`install.sh` creates `~/Sandboxes`, seeds a `config.toml` from
+`config.toml.example` (only if you don't have one yet), and prints the line to
 add `~/.sandbox/bin` to your PATH. The menu needs `gum`; it offers to
 `brew install gum` the first time you open it without one. `sandbox <name>`
 skips the menu and doesn't need `gum` at all.
@@ -30,20 +30,19 @@ home, so auth, config, and shell history persist across image rebuilds and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
 
-## Configuring packages (`packages.toml`)
+## Configuring the sandbox (`config.toml`)
 
-Your package list lives in `packages.toml`, which is **gitignored** and seeded
-from the tracked **`packages.toml.example`**. Start from the template (this is
-exactly what `install.sh` does on first run):
+Your config lives in `config.toml`, which is **gitignored** and seeded from the
+tracked **`config.toml.example`**. Start from the template (this is exactly what
+`install.sh` does on first run):
 
 ```sh
-cp packages.toml.example packages.toml
+cp config.toml.example config.toml
 ```
 
-Keeping your list untracked means editing it never conflicts with `git pull`.
-Editing `packages.toml` (or anything in `image/`) changes the image's source
-hash, so the next `sandbox <name>` rebuilds the image and recreates the sandbox
-on it.
+Keeping it untracked means editing it never conflicts with `git pull`. Editing
+`config.toml` (or anything in `image/`) changes the image's source hash, so the
+next `sandbox <name>` rebuilds the image and recreates the sandbox on it.
 
 ```toml
 [apt]
@@ -58,6 +57,10 @@ casks    = ["claude-code@latest"]     # Homebrew casks that ship a Linux build
 commands = [                          # shell run at build time as the sandbox user (+ sudo)
   "gcloud components install gke-gcloud-auth-plugin --quiet",
 ]
+
+[resources]
+memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
+cpus   = 4                            # container CPU count; omit for the platform default
 ```
 
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
@@ -67,24 +70,28 @@ commands = [                          # shell run at build time as the sandbox u
 - `[post_install]` is for anything that isn't a package — component installs,
   downloading a binary or AppImage, etc. It runs after all installs and **fails
   the build** on error.
+- `[resources]` sets each sandbox's memory and CPU (passed to `container run`).
+  Omit a value to use Apple Container's default (~1 GiB memory). Changing these
+  rebuilds the image on next launch, so the new limits take effect on a fresh
+  container.
 
 ## What's in the base image
 
-Everything not in `packages.toml` is structural, baked into `image/Dockerfile`:
+Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 
 - **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
-  `procps`, `python3` (parses `packages.toml`), `sudo`, `unzip`, `zsh`.
+  `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
 - **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
   mount).
 - A **non-root user** (UID matched to your host for bind-mount ownership) with
   passwordless `sudo`, `zsh` + oh-my-zsh, and a `📦 <name>` prompt showing the
   sandbox name.
 - **podman** wired for rootful use via a `sudo podman` shim (the `podman`
-  package itself comes from `packages.toml`).
+  package itself comes from `config.toml`).
 - A launcher that drops you into a zellij session named after the sandbox.
 
-Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `packages.toml`,
+Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `config.toml`,
 not the base image.
 
 ## Security scope
