@@ -75,12 +75,12 @@ no 'run_ensure_gum no yes yes no'           'install without gum on PATH: fails'
 ok 'grep -q "still isn.t on your PATH" "$TMP/err"' 'install without gum on PATH: says so'
 
 # bin/sandbox-build, driven against stubs. The repo is copied so the build sees
-# a packages.toml (untracked in a real checkout).
+# a config.toml (untracked in a real checkout).
 REPOCOPY="$TMP/repo"
 STUB="$TMP/stub"
 mkdir -p "$REPOCOPY" "$STUB"
 cp -R "$DIR/../bin" "$DIR/../image" "$REPOCOPY/"
-cp "$DIR/../packages.toml.example" "$REPOCOPY/packages.toml"
+cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
 cat > "$STUB/container" <<'STUBEOF'
 #!/usr/bin/env bash
