@@ -15,3 +15,8 @@ casks = ["claude-code@latest", "gcloud-cli", "tflint"]
 [post_install]
 # Shell commands run in order after all installs, baked into the image.
 commands = []
+
+[resources]
+# Passed to `container run`. Omit or leave empty for Apple Container defaults.
+memory = "4G"   # optional; K/M/G/T/P suffix
+cpus = 4        # optional; integer

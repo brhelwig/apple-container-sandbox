@@ -26,6 +26,18 @@ no 'validate_name ""'             'rejects empty'
 # sandbox_home_path
 ok '[ "$(sandbox_home_path myproject)" = "$SANDBOX_HOMES/myproject" ]' 'home path'
 
+# sandbox_resource_args
+RES="$TMP/res.toml"
+printf '[resources]\nmemory = "4G"\ncpus = 4\n' > "$RES"
+ok '[ "$(sandbox_resource_args "$RES" | tr "\n" " ")" = "--memory 4G --cpus 4 " ]' 'resource args: memory and cpus'
+printf '[resources]\nmemory = "2G"\n' > "$RES"
+ok '[ "$(sandbox_resource_args "$RES" | tr "\n" " ")" = "--memory 2G " ]' 'resource args: memory only'
+printf '[resources]\nmemory = ""\ncpus = ""\n' > "$RES"
+ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: empty values -> none'
+printf '[apt]\npackages = []\n' > "$RES"
+ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
+ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
+
 # list_sandboxes
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
 ok '[ "$(list_sandboxes | tr "\n" " ")" = "alpha beta " ]' 'lists sorted dirs'
