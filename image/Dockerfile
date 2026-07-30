@@ -29,6 +29,30 @@ RUN mkdir -p /etc/containers/registries.conf.d \
     && printf '#!/bin/sh\nexec sudo /usr/bin/podman "$@"\n' > /usr/local/bin/podman \
     && chmod +x /usr/local/bin/podman
 
+# 3b. config.toml -> k3s. Runtime deps plus the latest stable k3s binary, which
+#     is deliberately unpinned to match how [brew] formulae track latest. The
+#     kernel needs nothing: veth, bridge/br_netfilter, vxlan, netfilter/NAT and
+#     overlayfs are all built in (CONFIG_MODULES=n, so k3s's modprobe warnings
+#     at startup are expected and harmless).
+RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("k3s",{}).get("enabled") else 1)'; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+               conntrack ethtool iproute2 socat \
+        && rm -rf /var/lib/apt/lists/* \
+        && case "$(dpkg --print-architecture)" in \
+             arm64) asset=k3s-arm64 ;; \
+             amd64) asset=k3s ;; \
+             *) echo "unsupported arch for k3s: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+           esac \
+        && tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+                  https://update.k3s.io/v1-release/channels/stable | sed 's|.*/||')" \
+        && echo "installing k3s $tag ($asset)" \
+        && curl -fsSL -o /usr/local/bin/k3s \
+             "https://github.com/k3s-io/k3s/releases/download/$(printf '%s' "$tag" | sed 's/+/%2B/')/$asset" \
+        && chmod +x /usr/local/bin/k3s \
+        && /usr/local/bin/k3s --version; \
+    fi
+
 # 4. Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
 RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
@@ -80,12 +104,16 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
     && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
-# 11. Entry points + sandbox helpers.
+# 11. Entry points + sandbox helpers. config.toml lands at a stable path so
+#     runtime helpers (sandbox-k3s) can read their settings from it.
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
+COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup /usr/local/bin/sandbox-zellij
+COPY config.toml /etc/sandbox-config.toml
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
+        /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s
 
 USER $USERNAME
 WORKDIR $HOME

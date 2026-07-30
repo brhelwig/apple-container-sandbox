@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Bring a single-node k3s cluster up or down inside a sandbox.
+#
+#   sandbox-k3s up | down | status | enabled
+#
+# Cluster state lives on a sparse ext4 image in $HOME, loop-mounted at
+# /var/lib/rancher. It can't live on the home dir directly: the sandbox home is
+# virtiofs, where mknod is denied, so overlayfs whiteouts — which containerd's
+# snapshotter needs to delete files from a lower layer — are impossible.
+set -euo pipefail
+
+CONFIG=/etc/sandbox-config.toml
+STATE_DIR=/var/lib/rancher
+LOG=/var/log/k3s.log
+BRIDGE=br-k3s
+# The k3s server process, anchored so it can't match this script's own argv.
+K3S_PATTERN='^/usr/local/bin/k3s server'
+
+# cfg <key> <default>: read a [k3s] setting from the baked-in config.
+cfg() {
+    python3 - "$CONFIG" "$1" "$2" <<'PY'
+import sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as f:
+        val = tomllib.load(f).get("k3s", {}).get(sys.argv[2])
+except OSError:
+    val = None
+print(sys.argv[3] if val in (None, "") else val)
+PY
+}
+
+disk_img()  { printf '%s/.sandbox-k3s.img\n' "${SANDBOX_K3S_HOME:-$HOME}"; }
+running()   { pgrep -f "$K3S_PATTERN" >/dev/null 2>&1; }
+
+# enabled: 0 when [k3s].enabled is true. Used by the launch hook.
+enabled() { [ "$(cfg enabled false)" = "true" ]; }
+
+# mount_state: ensure the cluster disk exists and is mounted at $STATE_DIR.
+mount_state() {
+    local img loop
+    img="$(disk_img)"
+    findmnt -rno TARGET "$STATE_DIR" >/dev/null 2>&1 && return 0
+    if [ ! -f "$img" ]; then
+        echo "creating $(cfg disk 8G) cluster disk at $img (sparse)"
+        truncate -s "$(cfg disk 8G)" "$img"
+        mkfs.ext4 -q -F "$img"
+    fi
+    mkdir -p "$STATE_DIR"
+    loop="$(losetup --find --show "$img")"
+    mount "$loop" "$STATE_DIR"
+}
+
+# prepare_kernel: /proc/sys ships read-only, but k3s requires IP forwarding.
+prepare_kernel() {
+    mount -o remount,rw /proc/sys 2>/dev/null || true
+    sysctl -qw net.ipv4.ip_forward=1
+    sysctl -qw net.ipv6.conf.all.forwarding=1 2>/dev/null || true
+}
+
+# prepare_cgroups: kubelet creates /sys/fs/cgroup/kubepods and needs domain
+# controllers there. cgroup v2 forbids that while the root cgroup holds
+# processes of its own, so move them into a child first, then delegate. Without
+# this kubelet dies with "cannot enter cgroupv2 ... invalid state".
+prepare_cgroups() {
+    local type procs pid
+    type="$(cat /sys/fs/cgroup/cgroup.type 2>/dev/null || echo domain)"
+    if [ "$type" = "domain threaded" ]; then
+        echo "error: the root cgroup is 'domain threaded', which the kernel" >&2
+        echo "cannot convert back to a resource domain. Recreate the sandbox" >&2
+        echo "container to clear it — the cluster disk is preserved." >&2
+        return 1
+    fi
+    mkdir -p /sys/fs/cgroup/init
+    procs="$(cat /sys/fs/cgroup/cgroup.procs)"
+    for pid in $procs; do
+        printf '%s\n' "$pid" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
+    done
+    printf '%s\n' '+cpuset +cpu +io +memory +hugetlb +pids' \
+        > /sys/fs/cgroup/cgroup.subtree_control
+}
+
+# prepare_network: give the node a fixed address. Apple Container issues a new
+# DHCP lease every time a container is recreated, but persisted cluster state
+# pins the node IP — a changed address makes k3s refuse to start networking
+# ("failed to find interface with specified node ip").
+prepare_network() {
+    ip link show "$BRIDGE" >/dev/null 2>&1 && return 0
+    ip link add "$BRIDGE" type bridge
+    ip addr add "$(cfg node_ip 10.99.0.1)/24" dev "$BRIDGE"
+    ip link set "$BRIDGE" up
+}
+
+# link_kubeconfig: point the sandbox user's kubectl at the cluster.
+link_kubeconfig() {
+    local user home
+    user="${SUDO_USER:-$(id -un)}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    [ -n "$home" ] && [ -d "$home" ] || return 0
+    mkdir -p "$home/.kube"
+    ln -sfn /etc/rancher/k3s/k3s.yaml "$home/.kube/config"
+    chown "$user" "$home/.kube" 2>/dev/null || true
+    chown -h "$user" "$home/.kube/config" 2>/dev/null || true
+}
+
+up() {
+    if running; then echo "k3s is already running"; return 0; fi
+    mount_state
+    prepare_kernel
+    prepare_cgroups
+    prepare_network
+    [ -s /etc/machine-id ] || tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id
+    link_kubeconfig
+    setsid nohup /usr/local/bin/k3s server \
+        --write-kubeconfig-mode 644 \
+        --node-ip "$(cfg node_ip 10.99.0.1)" \
+        --flannel-iface "$BRIDGE" \
+        >> "$LOG" 2>&1 < /dev/null &
+    echo "k3s starting in the background; watch it with: sandbox-k3s status"
+}
+
+down() {
+    local img loop waited=0
+    pkill -f "$K3S_PATTERN" 2>/dev/null || true
+    pkill -f 'containerd-shim' 2>/dev/null || true
+    while running && [ "$waited" -lt 20 ]; do sleep 1; waited=$((waited + 1)); done
+    # k3s leaves many mounts under the state dir; clear them deepest-first so
+    # the loop device can be released.
+    awk '{print $2}' /proc/mounts \
+        | grep -E '^/(var/lib/(rancher|kubelet)|run/(k3s|netns))' \
+        | sort -r \
+        | while read -r m; do umount -l "$m" 2>/dev/null || true; done
+    umount -l "$STATE_DIR" 2>/dev/null || true
+    img="$(disk_img)"
+    loop="$(losetup -j "$img" -O NAME -n 2>/dev/null | head -1 || true)"
+    [ -n "$loop" ] && losetup -d "$loop" 2>/dev/null || true
+    echo "k3s stopped; cluster state kept in $img"
+}
+
+status() {
+    if ! running; then
+        echo "k3s: not running"
+        return 1
+    fi
+    echo "k3s: running"
+    findmnt -rno SIZE,USED,TARGET "$STATE_DIR" 2>/dev/null | sed 's/^/disk: /'
+    if ! /usr/local/bin/k3s kubectl get nodes 2>/dev/null; then
+        echo "API server not ready yet — see $LOG"
+        return 0
+    fi
+    /usr/local/bin/k3s kubectl get pods -A 2>/dev/null || true
+}
+
+main() {
+    local cmd="${1:-status}"
+    case "$cmd" in
+        enabled) enabled; return $? ;;
+        up|down|status) ;;
+        -h|--help)
+            sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+            return 0 ;;
+        *)
+            echo "usage: sandbox-k3s [up|down|status|enabled]" >&2
+            return 2 ;;
+    esac
+
+    # up/down/status all need root (mount, cgroups, netlink, kubeconfig).
+    if [ "$(id -u)" -ne 0 ]; then
+        exec sudo -E "$0" "$cmd"
+    fi
+    "$cmd"
+}
+
+main "$@"

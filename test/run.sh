@@ -189,7 +189,10 @@ run_launch
 ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container run'
 no 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s off -> no --cap-add'
 
-printf '\n[k3s]\nenabled = true\n' >> "$REPOCOPY/config.toml"
+# Flip the shipped `enabled = false` rather than appending a second [k3s]
+# table, which would be a duplicate-table TOML error.
+sed -i.bak 's/^enabled = false$/enabled = true/' "$REPOCOPY/config.toml"
+ok 'sandbox_k3s_enabled "$REPOCOPY/config.toml"'    'launch fixture: k3s now enabled'
 run_launch
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s on -> passes --cap-add'
 ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: k3s on -> grants ALL'

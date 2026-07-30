@@ -20,3 +20,14 @@ commands = []
 # Passed to `container run`. Omit or leave empty for Apple Container defaults.
 memory = "4G"   # optional; K/M/G/T/P suffix
 cpus = 4        # optional; integer
+
+[k3s]
+# A single-node Kubernetes cluster, started automatically on launch.
+#
+# This setting is global, so enabling it applies to EVERY sandbox: each gets its
+# own cluster, its own disk, and a fully privileged container (k3s needs
+# CAP_SYS_ADMIN and CAP_NET_ADMIN, which the default capability set omits — see
+# "Security scope" in the README). Needs [resources].memory >= 4G.
+enabled = false
+disk = "8G"              # sparse ext4 image in the sandbox home holding cluster state
+node_ip = "10.99.0.1"    # fixed node address; must not collide with your LAN
