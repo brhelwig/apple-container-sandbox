@@ -9,7 +9,8 @@
 # snapshotter needs to delete files from a lower layer — are impossible.
 set -euo pipefail
 
-CONFIG=/etc/sandbox-config.toml
+# Overridable so the config parsing can be tested outside a container.
+CONFIG="${SANDBOX_K3S_CONFIG:-/etc/sandbox-config.toml}"
 STATE_DIR=/var/lib/rancher
 LOG=/var/log/k3s.log
 BRIDGE=br-k3s
@@ -25,12 +26,27 @@ try:
         val = tomllib.load(f).get("k3s", {}).get(sys.argv[2])
 except OSError:
     val = None
+if isinstance(val, bool):
+    val = "true" if val else "false"
 print(sys.argv[3] if val in (None, "") else val)
 PY
 }
 
-disk_img()  { printf '%s/.sandbox-k3s.img\n' "${SANDBOX_K3S_HOME:-$HOME}"; }
+# sandbox_home: the sandbox user's home, which is the bind-mounted host dir.
+# Resolved from SUDO_USER rather than $HOME because sudo's default env_reset
+# would otherwise hand us root's home after the re-exec below.
+sandbox_home() {
+    local user home
+    user="${SUDO_USER:-$(id -un)}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    printf '%s\n' "${home:-$HOME}"
+}
+
+disk_img()  { printf '%s/.sandbox-k3s.img\n' "$(sandbox_home)"; }
 running()   { pgrep -f "$K3S_PATTERN" >/dev/null 2>&1; }
+
+# disk_loop: the loop device already backing the cluster disk, if any.
+disk_loop() { losetup -j "$(disk_img)" 2>/dev/null | head -1 | cut -d: -f1; }
 
 # enabled: 0 when [k3s].enabled is true. Used by the launch hook.
 enabled() { [ "$(cfg enabled false)" = "true" ]; }
@@ -46,7 +62,10 @@ mount_state() {
         mkfs.ext4 -q -F "$img"
     fi
     mkdir -p "$STATE_DIR"
-    loop="$(losetup --find --show "$img")"
+    # Reuse the existing device if the disk is already attached — a previous
+    # `down` may still be releasing it — so one file never gets two loops.
+    loop="$(disk_loop)"
+    [ -n "$loop" ] || loop="$(losetup --find --show "$img")"
     mount "$loop" "$STATE_DIR"
 }
 
@@ -75,8 +94,13 @@ prepare_cgroups() {
     for pid in $procs; do
         printf '%s\n' "$pid" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
     done
-    printf '%s\n' '+cpuset +cpu +io +memory +hugetlb +pids' \
-        > /sys/fs/cgroup/cgroup.subtree_control
+    if ! printf '%s\n' '+cpuset +cpu +io +memory +hugetlb +pids' \
+            > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
+        echo "error: cannot delegate cgroup controllers to kubelet." >&2
+        echo "The sandbox is most likely missing CAP_SYS_ADMIN — check that" >&2
+        echo "[k3s].enabled is set in config.toml and relaunch the sandbox." >&2
+        return 1
+    fi
 }
 
 # prepare_network: give the node a fixed address. Apple Container issues a new
@@ -94,7 +118,7 @@ prepare_network() {
 link_kubeconfig() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
-    home="$(getent passwd "$user" | cut -d: -f6)"
+    home="$(sandbox_home)"
     [ -n "$home" ] && [ -d "$home" ] || return 0
     mkdir -p "$home/.kube"
     ln -sfn /etc/rancher/k3s/k3s.yaml "$home/.kube/config"
@@ -125,14 +149,23 @@ down() {
     while running && [ "$waited" -lt 20 ]; do sleep 1; waited=$((waited + 1)); done
     # k3s leaves many mounts under the state dir; clear them deepest-first so
     # the loop device can be released.
+    # `|| true`: with pipefail, grep matching nothing (no cluster ever started)
+    # would otherwise abort before the state dir is unmounted.
     awk '{print $2}' /proc/mounts \
         | grep -E '^/(var/lib/(rancher|kubelet)|run/(k3s|netns))' \
         | sort -r \
-        | while read -r m; do umount -l "$m" 2>/dev/null || true; done
-    umount -l "$STATE_DIR" 2>/dev/null || true
+        | while read -r m; do umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true; done || true
+    # Prefer a real unmount; a lazy one leaves the loop device busy.
+    umount "$STATE_DIR" 2>/dev/null || umount -l "$STATE_DIR" 2>/dev/null || true
     img="$(disk_img)"
-    loop="$(losetup -j "$img" -O NAME -n 2>/dev/null | head -1 || true)"
-    [ -n "$loop" ] && losetup -d "$loop" 2>/dev/null || true
+    # Detaching can be deferred while the unmount settles, so retry briefly.
+    waited=0
+    while [ -n "$(disk_loop)" ] && [ "$waited" -lt 5 ]; do
+        losetup -d "$(disk_loop)" 2>/dev/null || true
+        [ -n "$(disk_loop)" ] || break
+        sleep 1
+        waited=$((waited + 1))
+    done
     echo "k3s stopped; cluster state kept in $img"
 }
 
@@ -142,7 +175,7 @@ status() {
         return 1
     fi
     echo "k3s: running"
-    findmnt -rno SIZE,USED,TARGET "$STATE_DIR" 2>/dev/null | sed 's/^/disk: /'
+    findmnt -rno SIZE,USED,TARGET "$STATE_DIR" 2>/dev/null | sed 's/^/disk: /' || true
     if ! /usr/local/bin/k3s kubectl get nodes 2>/dev/null; then
         echo "API server not ready yet — see $LOG"
         return 0
@@ -153,7 +186,7 @@ status() {
 main() {
     local cmd="${1:-status}"
     case "$cmd" in
-        enabled) enabled; return $? ;;
+        enabled) enabled && return 0 || return 1 ;;
         up|down|status) ;;
         -h|--help)
             sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
@@ -165,7 +198,7 @@ main() {
 
     # up/down/status all need root (mount, cgroups, netlink, kubeconfig).
     if [ "$(id -u)" -ne 0 ]; then
-        exec sudo -E "$0" "$cmd"
+        exec sudo "$0" "$cmd"
     fi
     "$cmd"
 }

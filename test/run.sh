@@ -197,6 +197,24 @@ run_launch
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s on -> passes --cap-add'
 ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: k3s on -> grants ALL'
 
+# image/sandbox-k3s config parsing. The launch hook gates on `sandbox-k3s
+# enabled`, so this has to agree with sandbox_k3s_enabled in lib.sh — tomllib
+# yields a Python bool, which prints as "True" unless it's normalised.
+K3SH="$DIR/../image/sandbox-k3s"
+printf '[k3s]\nenabled = true\n' > "$K3S"
+ok 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: enabled = true -> 0'
+printf '[k3s]\nenabled = false\n' > "$K3S"
+no 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: enabled = false -> 1'
+printf '[apt]\npackages = []\n' > "$K3S"
+no 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: no section -> 1'
+no 'SANDBOX_K3S_CONFIG="$TMP/nope.toml" bash "$K3SH" enabled' 'sandbox-k3s: missing file -> 1'
+
+# lib.sh and sandbox-k3s must agree, since one gates the caps and the other the
+# cluster startup; disagreement means a privileged sandbox with no cluster.
+printf '[k3s]\nenabled = true\n' > "$K3S"
+ok 'sandbox_k3s_enabled "$K3S" && SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' \
+   'sandbox-k3s and lib.sh agree when enabled'
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
