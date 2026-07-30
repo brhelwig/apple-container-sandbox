@@ -61,6 +61,11 @@ commands = [                          # shell run at build time as the sandbox u
 [resources]
 memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
 cpus   = 4                            # container CPU count; omit for the platform default
+
+[k3s]
+enabled = false                       # a single-node Kubernetes cluster, started on launch
+disk    = "8G"                        # sparse ext4 image holding cluster state
+node_ip = "10.99.0.1"                 # fixed node address; must not collide with your LAN
 ```
 
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
@@ -74,6 +79,50 @@ cpus   = 4                            # container CPU count; omit for the platfo
   Omit a value to use Apple Container's default (~1 GiB memory). Changing these
   rebuilds the image on next launch, so the new limits take effect on a fresh
   container.
+- `[k3s]` runs a single-node Kubernetes cluster in every sandbox — see
+  [Kubernetes](#kubernetes-k3s) below. Off by default.
+
+## Kubernetes (k3s)
+
+Set `enabled = true` under `[k3s]` and each sandbox gets its own single-node
+cluster, started in the background as the sandbox launches. `kubectl`, `helm`,
+`k9s` and friends come from `[brew].formulae`, and `~/.kube/config` is pointed at
+the cluster for you.
+
+```sh
+sandbox-k3s status    # node + pod summary, or why it isn't up yet
+sandbox-k3s down      # stop the cluster (state is kept)
+sandbox-k3s up        # start it again
+```
+
+Bring-up takes roughly 30 s and ~800 MB of RAM. The launch hook doesn't wait for
+it, so you get a shell immediately and the cluster converges behind you. If it
+fails, you still get a shell — check `/var/log/k3s.log`.
+
+**Cluster state persists.** It lives on a sparse ext4 image
+(`~/Sandboxes/<name>/.sandbox-k3s.img`) that is loop-mounted inside the
+container, so your workloads, cached images, and cluster objects survive
+container recreation and image rebuilds. `disk` is a ceiling, not an
+allocation — an `8G` image occupies ~1.5 GB of real disk with a cluster running.
+The state can't live on the home dir directly because that's a virtiofs mount,
+where `mknod` is denied and so overlayfs whiteouts are impossible.
+
+To grow a disk later, stop the cluster and, in the sandbox,
+`truncate -s <bigger> ~/.sandbox-k3s.img` then `resize2fs` it after remounting.
+To start over, `sandbox-k3s down` and delete the image file.
+
+A few consequences worth knowing:
+
+- **The setting is global.** `config.toml` is shared, so enabling k3s applies to
+  *every* sandbox — each with its own cluster, disk, and startup cost.
+- **Needs `[resources].memory` of at least 4G.** Apple Container's ~1 GiB
+  default is not enough for the control plane.
+- **k3s is unpinned**, tracking the stable channel like `[brew]` formulae do, so
+  two rebuilds can install different k3s versions.
+- **The node IP is fixed** rather than the container's DHCP address, which
+  changes on every recreation and would otherwise break the persisted cluster.
+- `modprobe` warnings in the k3s log are expected — the kernel is monolithic and
+  already has everything built in.
 
 ## What's in the base image
 
@@ -113,6 +162,14 @@ and does not protect:
   Container (a lightweight Linux VM), separating sandboxes from each other and
   from macOS — but a sandbox still runs your code with full network and your
   mounted home. It is not a jail for untrusted code.
+- **`[k3s].enabled` drops the capability limits.** By default a sandbox gets
+  Apple Container's standard capability set, which withholds `CAP_SYS_ADMIN` and
+  `CAP_NET_ADMIN`. k3s needs both (mounts, cgroup delegation, iptables, network
+  namespaces), so an enabled sandbox runs with `--cap-add ALL` and its startup
+  remounts `/proc/sys` read-write and rewrites cgroup delegation. Since the
+  setting is global, this applies to *every* sandbox. Code in a k3s sandbox is
+  effectively root over that VM — still contained by the VM boundary, but with
+  none of the in-guest restraint a default sandbox has.
 
 **Bottom line: a sandbox is only as secure as the host it runs on.** Don't put
 secrets in a sandbox you wouldn't put on the host, and don't run untrusted code
