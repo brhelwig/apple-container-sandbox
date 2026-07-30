@@ -33,6 +33,39 @@ for flag, key in (("--memory", "memory"), ("--cpus", "cpus")):
 PY
 }
 
+# sandbox_k3s_value <config> <key> <default>: print the [k3s] setting <key>,
+# falling back to <default> when the file, the section, or the key is
+# absent/empty. Booleans print as lowercase true/false.
+sandbox_k3s_value() {
+    local out=""
+    if [ -r "$1" ]; then
+        out="$(python3 - "$1" "$2" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    val = tomllib.load(f).get("k3s", {}).get(sys.argv[2])
+if isinstance(val, bool):
+    val = "true" if val else "false"
+print("" if val is None else val)
+PY
+)"
+    fi
+    if [ -n "$out" ]; then printf '%s\n' "$out"; else printf '%s\n' "$3"; fi
+}
+
+# sandbox_k3s_enabled <config>: 0 if [k3s].enabled is true.
+sandbox_k3s_enabled() {
+    [ "$(sandbox_k3s_value "$1" enabled false)" = "true" ]
+}
+
+# sandbox_cap_args <config>: print the `container run` capability flags, one
+# token per line. k3s needs CAP_SYS_ADMIN (mount, cgroups) and CAP_NET_ADMIN
+# (iptables, netns), neither of which is in the default set, so a k3s-enabled
+# sandbox runs fully privileged. Silent when k3s is off.
+sandbox_cap_args() {
+    sandbox_k3s_enabled "$1" || return 0
+    printf '%s\n' "--cap-add" "ALL"
+}
+
 # confirm <prompt>: ask for approval; 0 if approved. No terminal means no.
 confirm() {
     if command -v gum >/dev/null 2>&1; then

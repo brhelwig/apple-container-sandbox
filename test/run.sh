@@ -38,6 +38,31 @@ printf '[apt]\npackages = []\n' > "$RES"
 ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
 ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
 
+# sandbox_k3s_enabled
+K3S="$TMP/k3s.toml"
+printf '[k3s]\nenabled = true\n' > "$K3S"
+ok 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: true -> yes'
+printf '[k3s]\nenabled = false\n' > "$K3S"
+no 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: false -> no'
+printf '[apt]\npackages = []\n' > "$K3S"
+no 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: no section -> no'
+no 'sandbox_k3s_enabled "$TMP/nope.toml"' 'k3s enabled: missing file -> no'
+
+# sandbox_cap_args: k3s needs CAP_SYS_ADMIN/CAP_NET_ADMIN, absent from the default set.
+printf '[k3s]\nenabled = true\n' > "$K3S"
+ok '[ "$(sandbox_cap_args "$K3S" | tr "\n" " ")" = "--cap-add ALL " ]' 'cap args: enabled -> --cap-add ALL'
+printf '[k3s]\nenabled = false\n' > "$K3S"
+ok '[ -z "$(sandbox_cap_args "$K3S")" ]'  'cap args: disabled -> none'
+ok '[ -z "$(sandbox_cap_args "$TMP/nope.toml")" ]' 'cap args: missing file -> none'
+
+# sandbox_k3s_value <config> <key> <default>: settings the in-container helper reads.
+printf '[k3s]\nenabled = true\ndisk = "8G"\nnode_ip = "10.99.0.1"\n' > "$K3S"
+ok '[ "$(sandbox_k3s_value "$K3S" disk 4G)" = "8G" ]'             'k3s value: reads disk'
+ok '[ "$(sandbox_k3s_value "$K3S" node_ip 1.2.3.4)" = "10.99.0.1" ]' 'k3s value: reads node_ip'
+printf '[k3s]\nenabled = true\n' > "$K3S"
+ok '[ "$(sandbox_k3s_value "$K3S" disk 8G)" = "8G" ]'             'k3s value: absent key -> default'
+ok '[ "$(sandbox_k3s_value "$TMP/nope.toml" disk 8G)" = "8G" ]'   'k3s value: missing file -> default'
+
 # list_sandboxes
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
 ok '[ "$(list_sandboxes | tr "\n" " ")" = "alpha beta " ]' 'lists sorted dirs'
@@ -141,6 +166,33 @@ ok 'grep -q "rosetta = false" "$TMP/err"'       'declined: names the arm64-only 
 run_build 9 0 'Error: no space left on device'; status=$?
 ok '[ "$status" -ne 0 ]'                        'other failure: fails'
 ok '[ ! -e "$STUB/gum.log" ]'                   'other failure: no prompt'
+
+# bin/sandbox launch: the capability flags must actually reach `container run`,
+# since a missing --cap-add leaves k3s to fail later and less obviously.
+LSTUB="$TMP/lstub"
+mkdir -p "$LSTUB"
+cat > "$LSTUB/container" <<'STUBEOF'
+#!/usr/bin/env bash
+[ "$1" = run ] && printf '%s\n' "$@" > "$LAUNCH_LOG"
+exit 0
+STUBEOF
+chmod +x "$LSTUB/container"
+
+# run_launch: launch a sandbox against the stub; `container run` argv in $TMP/launch.log.
+run_launch() {
+    rm -f "$TMP/launch.log"
+    LAUNCH_LOG="$TMP/launch.log" SANDBOX_HOMES="$TMP/homes" \
+        PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" testbox >/dev/null 2>&1
+}
+
+run_launch
+ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container run'
+no 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s off -> no --cap-add'
+
+printf '\n[k3s]\nenabled = true\n' >> "$REPOCOPY/config.toml"
+run_launch
+ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s on -> passes --cap-add'
+ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: k3s on -> grants ALL'
 
 echo "----"
 echo "$pass passed, $fail failed"

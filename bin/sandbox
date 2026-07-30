@@ -50,10 +50,16 @@ launch() {
     while IFS= read -r line; do resource_args+=("$line"); done \
         < <(sandbox_resource_args "$REPO/config.toml")
 
+    # A k3s sandbox needs capabilities the default set doesn't grant.
+    local -a cap_args=()
+    while IFS= read -r line; do cap_args+=("$line"); done \
+        < <(sandbox_cap_args "$REPO/config.toml")
+
     container run --rm --interactive --tty \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
         ${resource_args[@]+"${resource_args[@]}"} \
+        ${cap_args[@]+"${cap_args[@]}"} \
         "$image"
 }
 
