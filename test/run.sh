@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Tests for bin/lib.sh and bin/sandbox-build. Uses an isolated SANDBOX_HOMES
 # under a temp dir, and stubbed `container` / `sudo` / `gum` on PATH.
+#
+# Assertions are eval'd strings, so the variables they read look unused here.
+# shellcheck disable=SC2034
 set -uo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -149,7 +152,7 @@ ROSETTA_ERR='Error: internalError: "failed to bootstrap container buildkit (caus
 # bin/sandbox-build against the stubs; stdout in $out, stderr in $TMP/err.
 run_build() {
     rm -f "$STUB/attempts" "$STUB/sudo.log" "$STUB/gum.log"
-    out="$(STUB="$STUB" FAIL_BUILDS="$1" GUM_CONFIRM="$2" BUILD_ERROR="$3" \
+    out="$(env STUB="$STUB" FAIL_BUILDS="$1" GUM_CONFIRM="$2" BUILD_ERROR="$3" \
         PATH="$STUB:$PATH" bash "$REPOCOPY/bin/sandbox-build" 2>"$TMP/err")"
 }
 

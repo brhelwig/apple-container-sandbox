@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helpers for the sandbox CLI. Sourced, not executed.
 
 # Root dir holding one home dir per sandbox. Overridable for tests.

@@ -180,3 +180,9 @@ expecting containment.
 ```sh
 bash test/run.sh
 ```
+
+Every push also runs these on GitHub Actions, alongside ShellCheck, hadolint,
+and a Docker build of `image/Dockerfile` against `config.toml.example` — the
+build that catches a tap, formula, or cask breaking. Launching a real sandbox
+isn't covered: Apple Container needs the Virtualization framework, which hosted
+runners can't provide.

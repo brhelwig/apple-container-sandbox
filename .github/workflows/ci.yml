@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  schedule:
+    - cron: '0 7 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHELLCHECK_VERSION: v0.11.0
+  HADOLINT_VERSION: v2.15.1
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+
+      # sandbox-zellij and sandbox-prompt.zsh are zsh, which ShellCheck can't parse.
+      - name: ShellCheck
+        run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.aarch64.tar.xz" \
+            | tar -xJ --strip-components=1 -C /usr/local/bin "shellcheck-$SHELLCHECK_VERSION/shellcheck"
+          shellcheck -x --severity=warning \
+            bin/lib.sh bin/sandbox bin/sandbox-build bin/sandbox-src-hash \
+            install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s test/run.sh
+
+      - name: hadolint
+        run: |
+          curl -fsSL -o /usr/local/bin/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/$HADOLINT_VERSION/hadolint-linux-arm64"
+          chmod +x /usr/local/bin/hadolint
+          hadolint image/Dockerfile
+
+  test:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash test/run.sh
+
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Seed config.toml
+        run: cp config.toml.example config.toml
+
+      - uses: docker/setup-buildx-action@v4
+
+      # The layer cache is keyed on file content, so a formula breaking upstream
+      # while our files are unchanged only surfaces in the weekly uncached run.
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: image/Dockerfile
+          tags: sandbox:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha
+          no-cache: ${{ github.event_name == 'schedule' }}
+
+      - name: Smoke test
+        run: |
+          docker run --rm sandbox:ci bash -c 'test -f "$HOME/.sandbox-seeded" && test -f "$HOME/.zshrc"'
+          docker run --rm sandbox:ci bash -c 'zellij --version && gum --version && kubectl version --client'
+          docker run --rm sandbox:ci sandbox-setup
