@@ -114,16 +114,23 @@ prepare_network() {
     ip link set "$BRIDGE" up
 }
 
-# link_kubeconfig: point the sandbox user's kubectl at the cluster.
-link_kubeconfig() {
+# publish_kubeconfig: add the cluster to the sandbox kubeconfig once k3s has
+# written its own. The server writes that file some seconds after it starts, and
+# `up` deliberately returns before then, so wait for it in the background rather
+# than holding up the shell. Runs as the sandbox user, so anything it creates in
+# the home stays owned by them.
+publish_kubeconfig() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
     home="$(sandbox_home)"
     [ -n "$home" ] && [ -d "$home" ] || return 0
-    mkdir -p "$home/.kube"
-    ln -sfn /etc/rancher/k3s/k3s.yaml "$home/.kube/config"
-    chown "$user" "$home/.kube" 2>/dev/null || true
-    chown -h "$user" "$home/.kube/config" 2>/dev/null || true
+    (
+        for _ in $(seq 1 120); do
+            [ -s /etc/rancher/k3s/k3s.yaml ] && break
+            sleep 1
+        done
+        sudo -u "$user" env HOME="$home" /usr/local/bin/sandbox-kubeconfig
+    ) >/dev/null 2>&1 &
 }
 
 up() {
@@ -133,7 +140,7 @@ up() {
     prepare_cgroups
     prepare_network
     [ -s /etc/machine-id ] || tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id
-    link_kubeconfig
+    publish_kubeconfig
     setsid nohup /usr/local/bin/k3s server \
         --write-kubeconfig-mode 644 \
         --node-ip "$(cfg node_ip 10.99.0.1)" \

@@ -218,6 +218,84 @@ printf '[k3s]\nenabled = true\n' > "$K3S"
 ok 'sandbox_k3s_enabled "$K3S" && SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' \
    'sandbox-k3s and lib.sh agree when enabled'
 
+# image/sandbox-kubeconfig. kubectl locks a kubeconfig by creating "<file>.lock"
+# with mode 000, and virtiofs — the filesystem behind the bind-mounted sandbox
+# home — refuses to create such a file, so every `kubectl config` write against
+# a file in $HOME fails. KUBECONFIG therefore points at a shim dir on the
+# container filesystem, where the lock can be taken, whose entries write through
+# to the real (persistent) kubeconfig in the home.
+KUBE="$DIR/../image/sandbox-kubeconfig"
+KHOME="$TMP/kubehome"
+KSHIM="$TMP/kubeshim"
+KSRC="$TMP/k3s-src.yaml"
+
+filemode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+
+# run_kubeconfig: run the helper against the temp home, shim dir and cluster file.
+run_kubeconfig() {
+    HOME="$KHOME" SANDBOX_KUBE_DIR="$KSHIM" SANDBOX_K3S_KUBECONFIG="$KSRC" \
+        bash "$KUBE" >"$TMP/kube.out" 2>&1
+}
+
+rm -rf "$KHOME" "$KSHIM"; rm -f "$KSRC"
+ok 'run_kubeconfig'                                  'kubeconfig: runs with no home and no cluster'
+ok '[ -L "$KSHIM/config" ]'                          'kubeconfig: shim entry is a symlink'
+ok '[ "$(readlink "$KSHIM/config")" = "$KHOME/.kube/config" ]' \
+                                                     'kubeconfig: shim entry targets the home kubeconfig'
+ok '[ -f "$KHOME/.kube/config" ]'                    'kubeconfig: seeds a kubeconfig when absent'
+ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: seeded file is a kubeconfig'
+ok '[ "$(filemode "$KHOME/.kube/config")" = 600 ]'   'kubeconfig: seeded file is private'
+ok '[ ! -e "$KSHIM/k3s.yaml" ]'                      'kubeconfig: no cluster -> no cluster entry'
+
+# The regression this guards: sandbox-k3s used to `ln -sfn` the k3s kubeconfig
+# over $HOME/.kube/config on every launch, destroying whatever was there.
+printf 'apiVersion: v1\nkind: Config\n# sentinel\n' > "$KHOME/.kube/config"
+ok 'run_kubeconfig'                                  'kubeconfig: re-runs against an existing kubeconfig'
+ok 'grep -q "# sentinel" "$KHOME/.kube/config"'      'kubeconfig: never clobbers an existing kubeconfig'
+ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: leaves the home kubeconfig a real file'
+
+# A home left holding the old symlink has no data to lose, so it gets repaired.
+ln -sfn "$KSRC" "$KHOME/.kube/config"
+ok 'run_kubeconfig'                                  'kubeconfig: runs against the legacy symlink'
+ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: repairs the legacy k3s symlink'
+ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: reseeds after repairing the symlink'
+
+# k3s names its context, cluster and user all "default", which collides with
+# anything already called that in the user's own kubeconfig.
+cat > "$KSRC" <<'EOF'
+apiVersion: v1
+clusters:
+- cluster:
+    certificate-authority-data: QQ==
+    server: https://127.0.0.1:6443
+  name: default
+contexts:
+- context:
+    cluster: default
+    user: default
+  name: default
+current-context: default
+kind: Config
+users:
+- name: default
+  user:
+    client-certificate-data: QQ==
+EOF
+ok 'run_kubeconfig'                                  'kubeconfig: runs with a cluster present'
+ok '[ -f "$KSHIM/k3s.yaml" ]'                        'kubeconfig: renders the cluster entry'
+no 'grep -q ": default$" "$KSHIM/k3s.yaml"'          'kubeconfig: leaves no "default" name behind'
+ok '[ "$(grep -c ": k3s$" "$KSHIM/k3s.yaml")" -eq 6 ]' \
+                                                     'kubeconfig: renames cluster, user, context and current-context'
+ok 'grep -q "server: https://127.0.0.1:6443" "$KSHIM/k3s.yaml"' \
+                                                     'kubeconfig: keeps the cluster endpoint'
+ok '[ "$(filemode "$KSHIM/k3s.yaml")" = 600 ]'       'kubeconfig: rendered cluster entry is private'
+
+# The point of the shim: a write to the shim path lands in the persistent home
+# file, while the lock kubectl takes alongside it stays on the container fs.
+printf 'written through\n' > "$KSHIM/config"
+ok 'grep -q "written through" "$KHOME/.kube/config"' 'kubeconfig: shim writes through to the home file'
+ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: write-through keeps the home file real'
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
