@@ -229,7 +229,9 @@ KHOME="$TMP/kubehome"
 KSHIM="$TMP/kubeshim"
 KSRC="$TMP/k3s-src.yaml"
 
-filemode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+# GNU stat first: its -f is --file-system, which prints to stdout AND exits
+# non-zero here, so trying the BSD form first would pollute the output on Linux.
+filemode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 
 # run_kubeconfig: run the helper against the temp home, shim dir and cluster file.
 run_kubeconfig() {
