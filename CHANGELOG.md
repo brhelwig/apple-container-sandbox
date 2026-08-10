@@ -10,7 +10,16 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   container recreation and image rebuilds on a sparse ext4 image in the sandbox
   home (`disk`, default `8G`), loop-mounted at `/var/lib/rancher`. Manage it with
   `sandbox-k3s up|down|status`. Off by default.
-- `~/.kube/config` is linked to the cluster's kubeconfig automatically.
+- The cluster is published to the sandbox kubeconfig automatically, as a `k3s`
+  context. An existing kubeconfig is never modified — its own contexts, and any
+  added later, are left alone.
+- `KUBECONFIG` points at a shim directory on the container filesystem whose
+  `config` entry symlinks back to `~/.kube/config`. kubectl locks a kubeconfig
+  by creating a mode-000 file next to it, which virtiofs — the filesystem behind
+  the bind-mounted sandbox home — refuses to create, so a kubeconfig kept only in
+  the home could never be written by `kubectl config` or by
+  `gcloud container clusters get-credentials`. Writes still land in the home and
+  persist. Set up by `sandbox-kubeconfig`, whether or not k3s is enabled.
 
 ### Changed
 - A sandbox with `[k3s].enabled` runs with `--cap-add ALL`, because k3s requires

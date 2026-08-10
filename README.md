@@ -86,14 +86,28 @@ node_ip = "10.99.0.1"                 # fixed node address; must not collide wit
 
 Set `enabled = true` under `[k3s]` and each sandbox gets its own single-node
 cluster, started in the background as the sandbox launches. `kubectl`, `helm`,
-`k9s` and friends come from `[brew].formulae`, and `~/.kube/config` is pointed at
-the cluster for you.
+`k9s` and friends come from `[brew].formulae`, and the cluster shows up in your
+kubeconfig as a `k3s` context once it's ready.
 
 ```sh
 sandbox-k3s status    # node + pod summary, or why it isn't up yet
 sandbox-k3s down      # stop the cluster (state is kept)
 sandbox-k3s up        # start it again
 ```
+
+### Your kubeconfig
+
+The cluster is added alongside whatever is already in `~/.kube/config`; nothing
+there is modified, so remote clusters keep working next to the local one.
+
+`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`.
+kubectl locks a kubeconfig by creating a mode-000 file next to it, and virtiofs —
+the filesystem behind the bind-mounted sandbox home — refuses to create one, so
+`kubectl config` and `gcloud container clusters get-credentials` fail against a
+kubeconfig that lives only in the home. The lock is taken in that directory
+instead, while its `config` entry symlinks to `~/.kube/config` so your kubeconfig
+still lands in the home and survives the container. Run `sandbox-kubeconfig` to
+rebuild it by hand.
 
 Bring-up takes roughly 30 s and ~800 MB of RAM. The launch hook doesn't wait for
 it, so you get a shell immediately and the cluster converges behind you. If it

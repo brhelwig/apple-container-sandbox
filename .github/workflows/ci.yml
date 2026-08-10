@@ -29,7 +29,8 @@ jobs:
             | tar -xJ --strip-components=1 -C /usr/local/bin "shellcheck-$SHELLCHECK_VERSION/shellcheck"
           shellcheck -x --severity=warning \
             bin/lib.sh bin/sandbox bin/sandbox-build bin/sandbox-src-hash \
-            install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s test/run.sh
+            install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s \
+            image/sandbox-kubeconfig test/run.sh
 
       - name: hadolint
         run: |
@@ -86,6 +87,10 @@ jobs:
           docker run --rm "$IMAGE" bash -c 'test -f "$HOME/.sandbox-seeded" && test -f "$HOME/.zshrc"'
           docker run --rm "$IMAGE" bash -c 'zellij --version && gum --version && kubectl version --client'
           docker run --rm "$IMAGE" sandbox-setup
+          # The entrypoint assembled a kubeconfig KUBECONFIG can actually reach.
+          docker run --rm "$IMAGE" bash -c \
+            'test -L /var/lib/sandbox/kube/config && test -f "$HOME/.kube/config"'
+          docker run --rm "$IMAGE" bash -c 'kubectl config view >/dev/null'
 
       - name: k3s image contents
         if: matrix.config == 'k3s'

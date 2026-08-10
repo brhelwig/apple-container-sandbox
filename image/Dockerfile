@@ -110,10 +110,20 @@ COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
+COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
-        /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s
+        /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
+        /usr/local/bin/sandbox-kubeconfig
+
+# 11b. The kubeconfig shim dir. It has to sit on the container filesystem
+#      rather than the bind-mounted home: kubectl locks a kubeconfig with a
+#      mode-000 file alongside it, which virtiofs won't create. Its `config`
+#      entry is a symlink, so the kubeconfig still lands in the home and
+#      persists (see image/sandbox-kubeconfig).
+RUN install -d -o $USERNAME -g $USERNAME /var/lib/sandbox /var/lib/sandbox/kube
+ENV KUBECONFIG=/var/lib/sandbox/kube/config:/var/lib/sandbox/kube/k3s.yaml
 
 USER $USERNAME
 WORKDIR $HOME
