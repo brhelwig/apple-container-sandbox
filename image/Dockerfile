@@ -56,13 +56,15 @@ RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/con
 # 3c. config.toml -> the VS Code CLI, which `sandbox-code` runs as a tunnel. The
 #     download is the alpine asset because there is no cli-linux-* build; it is
 #     statically linked, so it runs on Debian. Unpinned, like the k3s binary.
+#     The download endpoint answers with a 504 often enough to have failed a
+#     build already, so the fetch retries rather than taking the first answer.
 RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("vscode",{}).get("enabled") else 1)'; then \
         case "$(dpkg --print-architecture)" in \
           arm64) asset=cli-alpine-arm64 ;; \
           amd64) asset=cli-alpine-x64 ;; \
           *) echo "unsupported arch for the VS Code CLI: $(dpkg --print-architecture)" >&2; exit 1 ;; \
         esac \
-        && curl -fsSL -o /tmp/vscode-cli.tar.gz \
+        && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vscode-cli.tar.gz \
              "https://code.visualstudio.com/sha/download?build=stable&os=$asset" \
         && tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
         && rm -f /tmp/vscode-cli.tar.gz \
