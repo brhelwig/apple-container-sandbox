@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Seed a fresh (bind-mounted, empty) $HOME from /etc/skel on first launch, put
-# the kubeconfig together, start the k3s cluster if one is configured, run the
-# per-sandbox setup hook, then exec the container command.
+# the kubeconfig together, start the k3s cluster and the VS Code tunnel if they
+# are configured, run the per-sandbox setup hook, then exec the container
+# command.
 set -euo pipefail
 
 if [ ! -e "$HOME/.sandbox-seeded" ]; then
@@ -21,6 +22,14 @@ fi
 # must never keep you out of a shell.
 if [ -x /usr/local/bin/sandbox-k3s ] && /usr/local/bin/sandbox-k3s enabled; then
     /usr/local/bin/sandbox-k3s up || echo "sandbox-k3s up failed; see /var/log/k3s.log" >&2
+fi
+
+# Start the VS Code tunnel when [vscode].enabled is set. `up` refuses until the
+# sandbox has been signed in once, and says which command does that, so a
+# sandbox that has never been signed in just prints the instruction and carries
+# on to a shell.
+if [ -x /usr/local/bin/sandbox-code ] && /usr/local/bin/sandbox-code enabled; then
+    /usr/local/bin/sandbox-code up || true
 fi
 
 /usr/local/bin/sandbox-setup || true

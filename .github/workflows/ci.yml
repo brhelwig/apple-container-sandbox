@@ -30,7 +30,7 @@ jobs:
           shellcheck -x --severity=warning \
             bin/lib.sh bin/sandbox bin/sandbox-build bin/sandbox-src-hash \
             install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s \
-            image/sandbox-kubeconfig test/run.sh
+            image/sandbox-code image/sandbox-kubeconfig test/run.sh
 
       - name: hadolint
         run: |
@@ -51,16 +51,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [default, k3s]
+        config: [default, k3s, vscode]
     steps:
       - uses: actions/checkout@v7
 
+      # Every optional section is named after its matrix row and gated on its
+      # own `enabled`, so one flip covers them all — scoped to the section, since
+      # more than one carries that key.
       - name: Seed config.toml
+        env:
+          SECTION: ${{ matrix.config }}
         run: |
           cp config.toml.example config.toml
-          if [ '${{ matrix.config }}' = k3s ]; then
-            sed -i 's/^enabled = false$/enabled = true/' config.toml
-            grep -q '^enabled = true$' config.toml
+          if [ "$SECTION" != default ]; then
+            awk -v s="[$SECTION]" '
+              /^\[/     { in_s = ($0 == s) }
+              in_s && $0 == "enabled = false" { $0 = "enabled = true" }
+                        { print }' config.toml > seeded.toml
+            mv seeded.toml config.toml
+            [ "$(awk -v s="[$SECTION]" '
+              /^\[/ { in_s = ($0 == s) }
+              in_s && $0 ~ /^enabled = / { print $3 }' config.toml)" = true ]
           fi
 
       - uses: docker/setup-buildx-action@v4
@@ -78,8 +89,9 @@ jobs:
           no-cache: ${{ github.event_name == 'schedule' }}
 
       # The entrypoint runs through sandbox-k3s on the k3s image, where an
-      # unprivileged `up` fails — so this also covers a failed cluster leaving
-      # the shell reachable.
+      # unprivileged `up` fails, and through sandbox-code on the vscode image,
+      # which is signed in to nothing — so this also covers a failed cluster or
+      # an unusable tunnel leaving the shell reachable.
       - name: Smoke test
         env:
           IMAGE: sandbox:${{ matrix.config }}
@@ -100,10 +112,24 @@ jobs:
           docker run --rm --entrypoint k3s "$IMAGE" --version
           docker run --rm --entrypoint sandbox-k3s "$IMAGE" enabled
 
-      - name: k3s absent by default
+      - name: vscode image contents
+        if: matrix.config == 'vscode'
+        env:
+          IMAGE: sandbox:${{ matrix.config }}
+        run: |
+          docker run --rm --entrypoint code "$IMAGE" --version
+          docker run --rm --entrypoint sandbox-code "$IMAGE" enabled
+          # Signed in to nothing, `up` refuses and points at the login command.
+          docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code up >/dev/null 2>&1'
+          docker run --rm --entrypoint bash "$IMAGE" -c \
+            'sandbox-code up 2>&1 | grep -q "sandbox-code login"'
+
+      - name: Optional tooling absent by default
         if: matrix.config == 'default'
         env:
           IMAGE: sandbox:${{ matrix.config }}
         run: |
           docker run --rm --entrypoint bash "$IMAGE" -c '! command -v k3s'
           docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-k3s enabled'
+          docker run --rm --entrypoint bash "$IMAGE" -c '! command -v code'
+          docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code enabled'

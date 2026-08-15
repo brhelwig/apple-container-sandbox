@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Run a VS Code Remote Tunnel inside a sandbox, so the sandbox can be opened in
+# VS Code from any machine signed in to the same account.
+#
+#   sandbox-code login | up | down | status | enabled
+#
+# The tunnel dials out to the VS Code tunnel service, so nothing listens inside
+# the sandbox and no port is published on the host. The CLI keeps its
+# credentials and the server it downloads under ~/.vscode, which is the
+# bind-mounted sandbox home, so one sign-in survives container recreation and
+# image rebuilds.
+set -euo pipefail
+
+# Both overridable so this can be tested outside a container.
+CONFIG="${SANDBOX_VSCODE_CONFIG:-/etc/sandbox-config.toml}"
+CODE="${SANDBOX_VSCODE_CLI:-/usr/local/bin/code}"
+LOG="$HOME/.sandbox-code.log"
+
+# cfg <key> <default>: read a [vscode] setting from the baked-in config.
+cfg() {
+    python3 - "$CONFIG" "$1" "$2" <<'PY'
+import sys, tomllib
+try:
+    with open(sys.argv[1], "rb") as f:
+        val = tomllib.load(f).get("vscode", {}).get(sys.argv[2])
+except OSError:
+    val = None
+if isinstance(val, bool):
+    val = "true" if val else "false"
+print(sys.argv[3] if val in (None, "") else val)
+PY
+}
+
+# enabled: 0 when [vscode].enabled is true. Used by the launch hook.
+enabled() { [ "$(cfg enabled false)" = "true" ]; }
+
+# tunnel_name: the sandbox name — the container hostname — reduced to the
+# lowercase letters, digits and hyphens the tunnel service accepts.
+tunnel_name() {
+    local name
+    name="$(hostname)"
+    name="${name//[^a-zA-Z0-9-]/-}"
+    printf '%s\n' "${name,,}"
+}
+
+# have_cli: 0 when the VS Code CLI is in the image, which only happens when
+# [vscode].enabled was set at build time.
+have_cli() {
+    [ -x "$CODE" ] && return 0
+    echo "The VS Code CLI isn't in this image. Set [vscode].enabled in" >&2
+    echo "config.toml and relaunch the sandbox to rebuild it." >&2
+    return 1
+}
+
+signed_in() { "$CODE" tunnel user show >/dev/null 2>&1; }
+
+# running: ask the CLI, which owns the answer for the whole machine.
+running() {
+    "$CODE" tunnel status 2>/dev/null | python3 -c '
+import json, sys
+try:
+    sys.exit(0 if json.load(sys.stdin).get("tunnel") else 1)
+except (json.JSONDecodeError, AttributeError):
+    sys.exit(1)
+'
+}
+
+login() {
+    have_cli
+    "$CODE" tunnel user login "$@"
+    echo "Signed in. Start the tunnel with: sandbox-code up"
+}
+
+up() {
+    have_cli
+    if running; then echo "the tunnel is already running"; return 0; fi
+    if ! signed_in; then
+        echo "Not signed in to the VS Code tunnel service." >&2
+        echo "Sign in once with: sandbox-code login" >&2
+        return 1
+    fi
+    local name
+    name="$(tunnel_name)"
+    setsid nohup "$CODE" tunnel \
+        --accept-server-license-terms \
+        --name "$name" \
+        >> "$LOG" 2>&1 < /dev/null &
+    echo "tunnel '$name' starting in the background; watch it with: sandbox-code status"
+}
+
+down() {
+    have_cli
+    "$CODE" tunnel kill
+    echo "tunnel stopped; the sign-in is kept"
+}
+
+status() {
+    have_cli
+    if ! running; then
+        echo "tunnel: not running"
+        signed_in || echo "not signed in — run: sandbox-code login"
+        [ -s "$LOG" ] && tail -n 5 "$LOG" | sed 's/^/log: /'
+        return 1
+    fi
+    echo "tunnel: running as '$(tunnel_name)'"
+    local url
+    url="$(grep -oE 'https://[^ ]*tunnel[^ ]*' "$LOG" 2>/dev/null | tail -1)" || true
+    if [ -n "$url" ]; then
+        echo "open: $url"
+    else
+        echo "no connection link in $LOG yet"
+    fi
+}
+
+main() {
+    local cmd="${1:-status}"
+    shift || true
+    case "$cmd" in
+        enabled) enabled && return 0 || return 1 ;;
+        login) login "$@" ;;
+        up|down|status) "$cmd" ;;
+        -h|--help)
+            sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+        *)
+            echo "usage: sandbox-code [login|up|down|status|enabled]" >&2
+            return 2 ;;
+    esac
+}
+
+main "$@"

@@ -66,6 +66,9 @@ cpus   = 4                            # container CPU count; omit for the platfo
 enabled = false                       # a single-node Kubernetes cluster, started on launch
 disk    = "8G"                        # sparse ext4 image holding cluster state
 node_ip = "10.99.0.1"                 # fixed node address; must not collide with your LAN
+
+[vscode]
+enabled = false                       # a VS Code Remote Tunnel, started on launch
 ```
 
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
@@ -81,6 +84,8 @@ node_ip = "10.99.0.1"                 # fixed node address; must not collide wit
   container.
 - `[k3s]` runs a single-node Kubernetes cluster in every sandbox — see
   [Kubernetes](#kubernetes-k3s) below. Off by default.
+- `[vscode]` lets you open a sandbox in VS Code — see
+  [VS Code](#vs-code-remote-tunnels) below. Off by default.
 
 ## Kubernetes (k3s)
 
@@ -138,6 +143,45 @@ A few consequences worth knowing:
 - `modprobe` warnings in the k3s log are expected — the kernel is monolithic and
   already has everything built in.
 
+## VS Code (Remote Tunnels)
+
+Set `enabled = true` under `[vscode]` and each sandbox gets the VS Code CLI plus
+`sandbox-code`, which runs the sandbox as a
+[Remote Tunnel](https://code.visualstudio.com/docs/remote/tunnels). The tunnel
+dials out to the VS Code tunnel service, so nothing listens inside the sandbox
+and no port is published on your Mac.
+
+Sign in once per sandbox, then open it from VS Code Desktop (Remote Explorer,
+with the Remote Tunnels extension) or from vscode.dev:
+
+```sh
+sandbox-code login     # GitHub or Microsoft account; asks which
+sandbox-code up        # start the tunnel
+sandbox-code status    # tunnel name and the link to open, or why it isn't up
+sandbox-code down      # stop the tunnel (the sign-in is kept)
+```
+
+After the first sign-in there is nothing to repeat: launching the sandbox starts
+the tunnel for you. The credentials and the server VS Code downloads live in
+`~/.vscode`, which is the bind-mounted sandbox home, so both survive container
+recreation and image rebuilds. A sandbox that has never been signed in prints
+the `sandbox-code login` line at launch and carries on to a shell.
+
+A few consequences worth knowing:
+
+- **The setting is global**, like `[k3s]` — enabling it puts the CLI in every
+  sandbox and starts a tunnel in each one you have signed in.
+- **The tunnel is named after the sandbox**, lowercased, with anything outside
+  letters, digits and hyphens replaced by a hyphen. Tunnel names belong to the
+  account rather than the machine, so the same sandbox name in two places is a
+  conflict. Whatever the tunnel service makes of a name lands in
+  `~/.sandbox-code.log`, which `sandbox-code status` tails when the tunnel isn't
+  up.
+- **The CLI is unpinned**, tracking the stable channel like k3s and the `[brew]`
+  formulae, so two rebuilds can install different versions.
+- **A running tunnel is remote access to the sandbox** — see "Security scope"
+  below.
+
 ## What's in the base image
 
 Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
@@ -184,6 +228,14 @@ and does not protect:
   setting is global, this applies to *every* sandbox. Code in a k3s sandbox is
   effectively root over that VM — still contained by the VM boundary, but with
   none of the in-guest restraint a default sandbox has.
+
+- **`[vscode].enabled` adds a way in from outside the machine.** A running
+  tunnel means anyone signed in to that GitHub or Microsoft account can open the
+  sandbox — its files and a terminal in it — from any machine, and the
+  connection is relayed by a third-party service rather than staying on your
+  network. The credentials that keep it running are plain files in the sandbox
+  home. Stop it with `sandbox-code down`, and sign out with
+  `code tunnel user logout`.
 
 **Bottom line: a sandbox is only as secure as the host it runs on.** Don't put
 secrets in a sandbox you wouldn't put on the host, and don't run untrusted code

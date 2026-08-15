@@ -194,7 +194,9 @@ no 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s off -> no --cap
 
 # Flip the shipped `enabled = false` rather than appending a second [k3s]
 # table, which would be a duplicate-table TOML error.
-sed -i.bak 's/^enabled = false$/enabled = true/' "$REPOCOPY/config.toml"
+# Only the first match, which is [k3s]'s: [vscode] carries an `enabled` of its
+# own, and flipping that one too would test something this case isn't about.
+sed -i.bak '0,/^enabled = false$/s//enabled = true/' "$REPOCOPY/config.toml"
 ok 'sandbox_k3s_enabled "$REPOCOPY/config.toml"'    'launch fixture: k3s now enabled'
 run_launch
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s on -> passes --cap-add'
@@ -217,6 +219,75 @@ no 'SANDBOX_K3S_CONFIG="$TMP/nope.toml" bash "$K3SH" enabled' 'sandbox-k3s: miss
 printf '[k3s]\nenabled = true\n' > "$K3S"
 ok 'sandbox_k3s_enabled "$K3S" && SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' \
    'sandbox-k3s and lib.sh agree when enabled'
+
+# image/sandbox-code config parsing. The launch hook gates the tunnel on
+# `sandbox-code enabled`, and the Dockerfile gates the CLI download on the same
+# setting, so a wrong answer here means either a tunnel with no CLI or a CLI
+# nobody starts.
+CODEH="$DIR/../image/sandbox-code"
+VSC="$TMP/vscode.toml"
+printf '[vscode]\nenabled = true\n' > "$VSC"
+ok 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: enabled = true -> 0'
+printf '[vscode]\nenabled = false\n' > "$VSC"
+no 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: enabled = false -> 1'
+printf '[apt]\npackages = []\n' > "$VSC"
+no 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: no section -> 1'
+no 'SANDBOX_VSCODE_CONFIG="$TMP/nope.toml" bash "$CODEH" enabled' 'sandbox-code: missing file -> 1'
+
+# Every other subcommand needs the CLI, which is only in the image when the
+# setting was on at build time. Without it they must say so rather than fail
+# obscurely, since the fix is a config edit and a relaunch.
+printf '[vscode]\nenabled = true\n' > "$VSC"
+
+# run_code <subcommand> <signed-in?>: run sandbox-code against a stubbed CLI,
+# or against a path where no CLI exists when <signed-in?> is "nocli". Output
+# lands in $TMP/vsc.out.
+run_code() {
+    local cli="$TMP/code-stub"
+    if [ "$2" = nocli ]; then
+        cli="$TMP/no-such-cli"
+    else
+        # `tunnel user show` exits non-zero when signed out; `tunnel status`
+        # reports a null tunnel when none is running (both as the real CLI does).
+        cat > "$cli" <<STUBEOF
+#!/usr/bin/env bash
+case "\$*" in
+    "tunnel user show") [ "$2" = yes ] && echo 'account' || { echo 'not logged in'; exit 1; } ;;
+    "tunnel status") echo '{"tunnel":null,"service_installed":false}' ;;
+    *) echo "\$*" >> "$TMP/code-stub.log" ;;
+esac
+STUBEOF
+        chmod +x "$cli"
+    fi
+    SANDBOX_VSCODE_CONFIG="$VSC" SANDBOX_VSCODE_CLI="$cli" HOME="$TMP" \
+        bash "$CODEH" "$1" >"$TMP/vsc.out" 2>&1
+}
+
+no 'run_code up nocli'                                  'sandbox-code: up without the CLI -> fails'
+ok 'grep -q "VS Code CLI isn.t in this image" "$TMP/vsc.out"' \
+                                                        'sandbox-code: up without the CLI says why'
+
+# The launch hook runs `up` on every launch of an enabled sandbox, including
+# ones that were never signed in. It has to fail with the fix in hand.
+rm -f "$TMP/code-stub.log"
+no 'run_code up no'                                     'sandbox-code: up signed out -> fails'
+ok 'grep -q "sandbox-code login" "$TMP/vsc.out"'        'sandbox-code: up signed out names the login command'
+ok '[ ! -e "$TMP/code-stub.log" ]'                      'sandbox-code: up signed out starts no tunnel'
+
+no 'run_code status yes'                                'sandbox-code: status with no tunnel -> fails'
+ok 'grep -q "tunnel: not running" "$TMP/vsc.out"'       'sandbox-code: status says the tunnel is down'
+
+# Signed in, `up` launches the tunnel in the background, so give the detached
+# process a moment to record its arguments. Without
+# --accept-server-license-terms the CLI waits for a prompt nobody can answer.
+rm -f "$TMP/code-stub.log"
+run_code up yes
+waited=0
+while [ ! -s "$TMP/code-stub.log" ] && [ "$waited" -lt 20 ]; do sleep 0.1; waited=$((waited+1)); done
+ok 'grep -q "^tunnel " "$TMP/code-stub.log"'            'sandbox-code: up signed in starts the tunnel'
+ok 'grep -q -- "--accept-server-license-terms" "$TMP/code-stub.log"' \
+                                                        'sandbox-code: up passes the license flag'
+ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names the tunnel'
 
 # image/sandbox-kubeconfig. kubectl locks a kubeconfig by creating "<file>.lock"
 # with mode 000, and virtiofs — the filesystem behind the bind-mounted sandbox
