@@ -157,7 +157,7 @@ with the Remote Tunnels extension) or from vscode.dev:
 ```sh
 sandbox-code login     # GitHub or Microsoft account; asks which
 sandbox-code up        # start the tunnel
-sandbox-code status    # tunnel name and the link to open, or why it isn't up
+sandbox-code status    # tunnel name, its link once the log carries one, or why it isn't up
 sandbox-code down      # stop the tunnel (the sign-in is kept)
 ```
 
@@ -172,11 +172,12 @@ A few consequences worth knowing:
 - **The setting is global**, like `[k3s]` — enabling it puts the CLI in every
   sandbox and starts a tunnel in each one you have signed in.
 - **The tunnel is named after the sandbox**, lowercased, with anything outside
-  letters, digits and hyphens replaced by a hyphen. Tunnel names belong to the
-  account rather than the machine, so the same sandbox name in two places is a
-  conflict. Whatever the tunnel service makes of a name lands in
-  `~/.sandbox-code.log`, which `sandbox-code status` tails when the tunnel isn't
-  up.
+  letters, digits and hyphens replaced by a hyphen. Whatever the tunnel service
+  makes of a name lands in `~/.sandbox-code.log`, which `sandbox-code status`
+  tails when the tunnel isn't up.
+- **An account holds ten tunnels.** Registering an eleventh deletes an unused
+  one at random, and since the setting is global, every sandbox you sign in
+  registers one of the ten.
 - **The CLI is unpinned**, tracking the stable channel like k3s and the `[brew]`
   formulae, so two rebuilds can install different versions.
 - **A running tunnel is remote access to the sandbox** — see "Security scope"
