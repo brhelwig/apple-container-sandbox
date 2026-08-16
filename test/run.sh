@@ -10,6 +10,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export SANDBOX_HOMES="$TMP/homes"
+# The in-image helpers source this from /etc, which does not exist out here.
+export SANDBOX_CONFIG_LIB="$DIR/../image/sandbox-config.sh"
 
 # shellcheck source=../bin/lib.sh
 . "$DIR/../bin/lib.sh"
@@ -58,13 +60,15 @@ printf '[k3s]\nenabled = false\n' > "$K3S"
 ok '[ -z "$(sandbox_cap_args "$K3S")" ]'  'cap args: disabled -> none'
 ok '[ -z "$(sandbox_cap_args "$TMP/nope.toml")" ]' 'cap args: missing file -> none'
 
-# sandbox_k3s_value <config> <key> <default>: settings the in-container helper reads.
+# sandbox_config: one reader for both sides of the container boundary.
 printf '[k3s]\nenabled = true\ndisk = "8G"\nnode_ip = "10.99.0.1"\n' > "$K3S"
-ok '[ "$(sandbox_k3s_value "$K3S" disk 4G)" = "8G" ]'             'k3s value: reads disk'
-ok '[ "$(sandbox_k3s_value "$K3S" node_ip 1.2.3.4)" = "10.99.0.1" ]' 'k3s value: reads node_ip'
+ok '[ "$(sandbox_config "$K3S" k3s disk 4G)" = "8G" ]'             'config: reads disk'
+ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "10.99.0.1" ]' 'config: reads node_ip'
+ok '[ "$(sandbox_config "$K3S" k3s enabled false)" = "true" ]'      'config: booleans print lowercase'
 printf '[k3s]\nenabled = true\n' > "$K3S"
-ok '[ "$(sandbox_k3s_value "$K3S" disk 8G)" = "8G" ]'             'k3s value: absent key -> default'
-ok '[ "$(sandbox_k3s_value "$TMP/nope.toml" disk 8G)" = "8G" ]'   'k3s value: missing file -> default'
+ok '[ "$(sandbox_config "$K3S" k3s disk 8G)" = "8G" ]'             'config: absent key -> default'
+ok '[ "$(sandbox_config "$K3S" vscode enabled false)" = "false" ]' 'config: absent section -> default'
+ok '[ "$(sandbox_config "$TMP/nope.toml" k3s disk 8G)" = "8G" ]'   'config: missing file -> default'
 
 # list_sandboxes
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
@@ -289,12 +293,128 @@ ok 'grep -q -- "--accept-server-license-terms" "$TMP/code-stub.log"' \
                                                         'sandbox-code: up passes the license flag'
 ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names the tunnel'
 
-# image/sandbox-kubeconfig. kubectl locks a kubeconfig by creating "<file>.lock"
-# with mode 000, and virtiofs — the filesystem behind the bind-mounted sandbox
-# home — refuses to create such a file, so every `kubectl config` write against
-# a file in $HOME fails. KUBECONFIG therefore points at a shim dir on the
-# container filesystem, where the lock can be taken, whose entries write through
-# to the real (persistent) kubeconfig in the home.
+# image/sandbox-manpage. The page is what a sandbox can say about itself from
+# the inside, so its tool lists have to come from the config the image was
+# built with — a page that lists something the build didn't install is worse
+# than no page.
+MANGEN="$DIR/../image/sandbox-manpage"
+MCFG="$TMP/man.toml"
+MOUT="$TMP/sandbox.7"
+gen_man() { python3 "$MANGEN" "$MCFG" "${1:-}" > "$MOUT" 2>"$TMP/man.err"; }
+
+cat > "$MCFG" <<'TOML'
+[apt]
+packages = ["podman", "ripgrep"]
+[brew]
+taps = ["hashicorp/tap"]
+formulae = ["gh", "jq"]
+casks = ["tflint"]
+[post_install]
+commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
+[k3s]
+enabled = true
+[vscode]
+enabled = true
+TOML
+ok 'gen_man'                                            'sandbox-manpage: writes a page'
+ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
+ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: lists the apt packages'
+ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists the brew taps'
+ok 'grep -q "gh, jq" "$MOUT"'                           'sandbox-manpage: lists the formulae'
+ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists the casks'
+ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
+ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s when enabled'
+ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code when enabled'
+
+# The base toolchain comes from the same build argument that installs it, so
+# the page and the image cannot disagree about it.
+ok 'gen_man "curl man-db zsh"'                          'sandbox-manpage: accepts the base packages'
+ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
+
+# A hyphen has to reach troff escaped, or the name renders as a dash and stops
+# being the string you would type or search for.
+no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
+
+# A sandbox with nothing configured still gets a page, and it has to say the
+# lists are empty rather than leaving a heading with nothing under it.
+printf '[apt]\npackages = []\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing configured'
+ok '[ "$(grep -c "None configured." "$MOUT")" -ge 4 ]'  'sandbox-manpage: says so where a list is empty'
+no 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: omits sandbox-k3s when disabled'
+no 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: omits sandbox-code when disabled'
+ok 'grep -qF "Set enabled under [k3s]" "$MOUT"'         'sandbox-manpage: says how to enable k3s'
+ok 'grep -qF "Set enabled under [vscode]" "$MOUT"'      'sandbox-manpage: says how to enable the tunnel'
+
+# image/sandbox-nice.sh. Sourced by every shell Claude spawns a command in, so
+# what it does to that shell is what every command inherits. The assertions read
+# the shell's own state after sourcing, since a setting that silently failed to
+# apply looks exactly like one that was never asked for.
+#
+# Linux only: macOS has no /proc and no ionice, and this runs on the host as
+# well as in CI.
+NICE="$DIR/../image/sandbox-nice.sh"
+if [ -e /proc/self/oom_score_adj ]; then
+    # A subshell per case: nice and oom_score_adj are inherited, so applying
+    # them to the test harness itself would leak into every later case.
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(nice)\" = 10 ]"' \
+                                                            'sandbox-nice: nices the shell'
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(cat /proc/self/oom_score_adj)\" = 1000 ]"' \
+                                                            'sandbox-nice: volunteers for the OOM killer'
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; nice" | grep -q 10' \
+                                                            'sandbox-nice: a child inherits the nice value'
+
+    # Only Claude's shells. An interactive shell, zellij and claude itself have
+    # to keep theirs, or the change protects nothing. CLAUDECODE has to be
+    # unset rather than left out: these tests run under Claude often enough,
+    # and there it is already in the environment.
+    #
+    # The claim is that the values are untouched, so each case compares against
+    # what that shell started with. Neither is 0 everywhere: a GitHub runner
+    # hands a shell a non-zero oom_score_adj.
+    unchanged() { env -u CLAUDECODE bash -c "before=\$($1); . \"$NICE\"; [ \"\$($1)\" = \"\$before\" ]"; }
+
+    ok 'unchanged nice'                                     'sandbox-nice: leaves other shells alone'
+    ok 'unchanged "cat /proc/self/oom_score_adj"'           'sandbox-nice: leaves their OOM score alone'
+
+    # It runs in shells with -u set, and in ones where renice or ionice is
+    # missing, so neither may fail the shell it was sourced into.
+    ok 'CLAUDECODE=1 bash -uc ". \"$NICE\""'                'sandbox-nice: survives set -u'
+    ok 'CLAUDECODE=1 PATH=/nonexistent /bin/bash -c ". \"$NICE\""' \
+                                                            'sandbox-nice: survives a missing renice'
+
+    # image/sandbox-background, which puts a command under the same settings on
+    # purpose. sandbox-k3s starts the cluster through it, so the whole cluster
+    # and its pods run as background work.
+    BG="$DIR/../image/sandbox-background"
+    run_bg() { env -u CLAUDECODE SANDBOX_NICE="$NICE" sh "$BG" "$@"; }
+
+    ok '[ "$(run_bg nice)" = 10 ]'                          'sandbox-background: nices the command'
+    ok '[ "$(run_bg cat /proc/self/oom_score_adj)" = 1000 ]' \
+                                                            'sandbox-background: volunteers it for the OOM killer'
+    ok '[ "$(run_bg sh -c "sh -c nice")" = 10 ]'            'sandbox-background: what it starts inherits'
+
+    # It execs, so the command keeps its own argv — sandbox-k3s finds and stops
+    # the server by matching that.
+    no 'run_bg sh -c "cat /proc/\$\$/cmdline" | grep -qa sandbox-background' \
+                                                            'sandbox-background: execs, leaving argv alone'
+    no 'run_bg > /dev/null 2>&1'                            'sandbox-background: no command -> fails'
+    ok 'run_bg --help | grep -q "background work"'          'sandbox-background: --help explains it'
+fi
+
+# image/sandbox-welcome. Every interactive zsh runs it, so it prints on the
+# first one and stays quiet after: a pointer repeated in every zellij pane
+# stops being a pointer and becomes noise.
+WELCOME="$DIR/../image/sandbox-welcome"
+WMARK="$TMP/welcomed"
+run_welcome() { SANDBOX_WELCOME_MARKER="$WMARK" bash "$WELCOME" > "$TMP/welcome.out" 2>&1; }
+
+ok 'run_welcome'                                        'sandbox-welcome: runs'
+ok 'grep -q "man sandbox" "$TMP/welcome.out"'           'sandbox-welcome: names the man page'
+ok '[ -e "$WMARK" ]'                                    'sandbox-welcome: records that it printed'
+ok 'run_welcome'                                        'sandbox-welcome: runs again'
+ok '[ ! -s "$TMP/welcome.out" ]'                        'sandbox-welcome: stays quiet the second time'
+
+# image/sandbox-kubeconfig — see that file for why the shim dir exists.
 KUBE="$DIR/../image/sandbox-kubeconfig"
 KHOME="$TMP/kubehome"
 KSHIM="$TMP/kubeshim"
@@ -320,18 +440,11 @@ ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: seeded file is
 ok '[ "$(filemode "$KHOME/.kube/config")" = 600 ]'   'kubeconfig: seeded file is private'
 ok '[ ! -e "$KSHIM/k3s.yaml" ]'                      'kubeconfig: no cluster -> no cluster entry'
 
-# The regression this guards: sandbox-k3s used to `ln -sfn` the k3s kubeconfig
-# over $HOME/.kube/config on every launch, destroying whatever was there.
+# A kubeconfig already in the home is the user's; nothing here may overwrite it.
 printf 'apiVersion: v1\nkind: Config\n# sentinel\n' > "$KHOME/.kube/config"
 ok 'run_kubeconfig'                                  'kubeconfig: re-runs against an existing kubeconfig'
 ok 'grep -q "# sentinel" "$KHOME/.kube/config"'      'kubeconfig: never clobbers an existing kubeconfig'
 ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: leaves the home kubeconfig a real file'
-
-# A home left holding the old symlink has no data to lose, so it gets repaired.
-ln -sfn "$KSRC" "$KHOME/.kube/config"
-ok 'run_kubeconfig'                                  'kubeconfig: runs against the legacy symlink'
-ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: repairs the legacy k3s symlink'
-ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: reseeds after repairing the symlink'
 
 # k3s names its context, cluster and user all "default", which collides with
 # anything already called that in the user's own kubeconfig.

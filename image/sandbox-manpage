@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Write the sandbox(7) man page for the image being built.
+
+    sandbox-manpage <config.toml> [base packages] > sandbox.7
+
+The tool lists come from the config.toml that the build installs from, and the
+base packages are passed in from the same build argument that installs them, so
+the page lists what the build put in rather than what someone remembered to
+write down. It runs at build time; see image/Dockerfile.
+"""
+
+import sys
+import tomllib
+
+REPO = "https://github.com/brhelwig/apple-container-sandbox"
+
+
+def roff(text):
+    """Quote a value that troff would otherwise read as markup."""
+    text = str(text).replace("\\", "\\e").replace("-", "\\-")
+    if text[:1] in (".", "'"):
+        text = "\\&" + text
+    return text
+
+
+def joined(values):
+    """A filled paragraph of names, or a note that there are none."""
+    return ", ".join(roff(v) for v in values) if values else "None configured."
+
+
+def main():
+    config_path = sys.argv[1]
+    base_packages = sys.argv[2].split() if len(sys.argv) > 2 else []
+    with open(config_path, "rb") as f:
+        config = tomllib.load(f)
+
+    apt = config.get("apt", {}).get("packages", [])
+    brew = config.get("brew", {})
+    taps = brew.get("taps", [])
+    formulae = brew.get("formulae", [])
+    casks = brew.get("casks", [])
+    commands = config.get("post_install", {}).get("commands", [])
+    k3s = bool(config.get("k3s", {}).get("enabled"))
+    vscode = bool(config.get("vscode", {}).get("enabled"))
+
+    out = []
+    add = out.append
+
+    add('.TH SANDBOX 7 "" "apple\\-container\\-sandbox" "Sandbox Manual"')
+
+    add(".SH NAME")
+    add("sandbox \\- the Linux sandbox you are in, and the tools installed in it")
+
+    add(".SH DESCRIPTION")
+    add(
+        "This is a sandbox built by apple\\-container\\-sandbox: a Debian container "
+        "that runs as a lightweight Linux virtual machine on macOS."
+    )
+    add(".PP")
+    add(
+        "The home directory is a bind mount from the Mac, at ~/Sandboxes/<name>, "
+        "and it is the only path the two share. Everything outside the home "
+        "belongs to the container. The sandbox name is the hostname, the zellij "
+        "session name, and the name in the prompt."
+    )
+
+    add(".SH WHAT PERSISTS")
+    add(
+        "The home directory persists. It survives container recreation and image "
+        "rebuilds, so shell history, credentials, and anything under the home "
+        "stay where they are."
+    )
+    add(".PP")
+    add(
+        "Nothing else persists. A package installed by hand is gone the next time "
+        "the image is rebuilt. To keep a tool, add it to config.toml on the Mac "
+        "and relaunch. See CHANGING WHAT IS INSTALLED below."
+    )
+
+    add(".SH INSTALLED TOOLS")
+    add("These come from config.toml, except the base toolchain, which is structural.")
+
+    add(".SS Base toolchain")
+    add(joined(sorted(base_packages)))
+
+    add(".SS Debian packages (apt)")
+    add(joined(apt))
+
+    add(".SS Homebrew taps")
+    add(joined(taps))
+
+    add(".SS Homebrew formulae")
+    add(joined(formulae))
+
+    add(".SS Homebrew casks")
+    add(joined(casks))
+
+    add(".SS Commands run after the installs")
+    if commands:
+        add(".nf")
+        for command in commands:
+            add(roff(command))
+        add(".fi")
+    else:
+        add("None configured.")
+
+    add(".SH HELPERS")
+    add(".TP")
+    add("sandbox\\-setup")
+    add("Per\\-launch setup for this sandbox. Runs at launch; re\\-runnable by hand.")
+    add(".TP")
+    add("sandbox\\-zellij")
+    add("Attach to the zellij session named after the sandbox, or start it.")
+    add(".TP")
+    add("sandbox\\-kubeconfig")
+    add(
+        "Rebuild the kubeconfig that KUBECONFIG points at. It lives outside "
+        "the home so that kubectl can take its lock file; writes still land in "
+        "the home and persist."
+    )
+    add(".TP")
+    add("podman")
+    add("Containers inside the sandbox. Runs rootful through sudo.")
+    add(".TP")
+    add("sandbox\\-background <command>")
+    add(
+        "Run a command as background work: niced to 10, idle I/O class, and "
+        "first in line for the OOM killer. Everything the command starts "
+        "inherits all three."
+    )
+    if k3s:
+        add(".TP")
+        add("sandbox\\-k3s up | down | status")
+        add(
+            "The single\\-node Kubernetes cluster, which starts at launch. Its log "
+            "is /var/log/k3s.log."
+        )
+    if vscode:
+        add(".TP")
+        add("sandbox\\-code login | up | down | status")
+        add(
+            "The VS Code Remote Tunnel, which starts at launch once you have "
+            "signed in. Its log is ~/.sandbox\\-code.log."
+        )
+
+    add(".SH COMMANDS RUN BY CLAUDE")
+    add(
+        "A command that Claude Code runs is niced to 10, put in the idle I/O "
+        "class, and made the first thing the kernel kills when the sandbox runs "
+        "out of memory. Claude spawns each command in its own shell, and that "
+        "shell applies all three to itself before the command starts, so "
+        "everything under it inherits them. A shell you type in is untouched, "
+        "and so are claude and zellij, which is the point: a command that goes "
+        "wrong loses one command rather than the session."
+    )
+    if k3s:
+        add(".PP")
+        add(
+            "The cluster starts the same way, so k3s and what it runs are niced "
+            "and in the idle I/O class too. Its OOM score is set rather than "
+            "inherited, since kubelet assigns its own. Each container keeps the "
+            "score kubelet computes for it from its quality of service class."
+        )
+
+    add(".SH OPTIONAL FEATURES")
+    add(".TP")
+    add("Kubernetes (k3s)")
+    if k3s:
+        add(
+            "Enabled. This sandbox runs its own single\\-node cluster, and its "
+            "state lives on ~/.sandbox\\-k3s.img. The sandbox also runs with the "
+            "full capability set, which k3s needs."
+        )
+    else:
+        add("Disabled. Set enabled under [k3s] in config.toml to turn it on.")
+    add(".TP")
+    add("VS Code")
+    if vscode:
+        add(
+            "Enabled. The VS Code CLI is installed, and sandbox\\-code runs this "
+            "sandbox as a Remote Tunnel you can open from VS Code anywhere."
+        )
+    else:
+        add("Disabled. Set enabled under [vscode] in config.toml to turn it on.")
+
+    add(".SH CHANGING WHAT IS INSTALLED")
+    add(
+        "config.toml lives on the Mac, in the apple\\-container\\-sandbox checkout, "
+        "not in the sandbox. Edit it there and run sandbox <name> again: the "
+        "image rebuilds, the container is recreated on it, and the home carries "
+        "over. This page is written by that build."
+    )
+    add(".PP")
+    add("The config this image was built from is at /etc/sandbox\\-config.toml.")
+
+    add(".SH SECURITY")
+    add(
+        "A sandbox is a convenience, not a security boundary. It has unrestricted "
+        "network access, and credentials written in it are plain files on the "
+        "Mac, under ~/Sandboxes/<name>. Do not put a secret in a sandbox that you "
+        "would not put on the Mac itself, and do not run untrusted code here "
+        "expecting it to be contained. The README covers the scope in full."
+    )
+
+    add(".SH FILES")
+    add(".TP")
+    add("/etc/sandbox\\-config.toml")
+    add("The config this image was built from.")
+    add(".TP")
+    add("~/.sandbox\\-seeded")
+    add("Marks a home that has been seeded with the shell configuration.")
+    add(".TP")
+    add("/etc/sandbox\\-nice.sh")
+    add("What gives a command run by Claude the standing of background work.")
+    add(".TP")
+    add("/usr/local/share/man/man7/sandbox.7")
+    add("This page.")
+
+    add(".SH SEE ALSO")
+    add(roff(REPO))
+    add(".PP")
+    add(
+        "Each tool listed above has its own documentation. Try man <tool>, or "
+        "<tool> \\-\\-help where there is no man page."
+    )
+
+    sys.stdout.write("\n".join(out) + "\n")
+
+
+main()

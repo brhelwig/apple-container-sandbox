@@ -30,6 +30,48 @@ home, so auth, config, and shell history persist across image rebuilds and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
 
+## Finding your way around a sandbox
+
+A sandbox can describe itself:
+
+```sh
+man sandbox
+```
+
+The page lists the tools installed in this sandbox, says where the home comes
+from and what survives a rebuild, and covers the `sandbox-*` helpers. It is
+written during the image build from the same `config.toml` that installs the
+tools, so it describes the image it ships in rather than a list someone keeps
+current by hand. Each freshly launched sandbox prints one line pointing at it.
+
+## Claude in a sandbox
+
+A command that Claude Code runs is niced to 10, put in the idle I/O class, and
+made the first thing the kernel kills if the sandbox runs out of memory. So a
+build or a test Claude starts loses the contest for CPU, disk and memory rather
+than the session losing it — killing a command costs a command, killing claude
+or zellij costs the session.
+
+Claude spawns each command in its own shell, and that shell sets all three on
+itself before the command starts. Every process under it inherits them. A shell
+you type in keeps its own standing, and so do claude and zellij.
+
+The OOM setting goes to the maximum rather than something milder because a
+sandbox without k3s holds no `CAP_SYS_RESOURCE`: a process cannot lower its OOM
+score back below where it started, so claude cannot be made harder to kill, only
+its commands easier. (A k3s sandbox runs with `--cap-add ALL` and could do it
+the other way around; the setting is the same for both.) `ionice` has an effect
+only under an I/O scheduler that implements priority, which is unverified for
+the Apple Container guest kernel; the CPU and memory parts do not depend on it.
+
+Run anything else the same way with `sandbox-background <command>`.
+
+A configured k3s cluster starts through that wrapper, so k3s and what it runs
+are niced and in the idle I/O class as well. Its OOM score is set rather than
+inherited, because kubelet gives itself one — `deprioritize_server` in
+`image/sandbox-k3s` covers the details. Each pod container keeps the score
+kubelet computes from its quality of service class.
+
 ## Configuring the sandbox (`config.toml`)
 
 Your config lives in `config.toml`, which is **gitignored** and seeded from the
@@ -105,14 +147,11 @@ sandbox-k3s up        # start it again
 The cluster is added alongside whatever is already in `~/.kube/config`; nothing
 there is modified, so remote clusters keep working next to the local one.
 
-`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`.
-kubectl locks a kubeconfig by creating a mode-000 file next to it, and virtiofs —
-the filesystem behind the bind-mounted sandbox home — refuses to create one, so
-`kubectl config` and `gcloud container clusters get-credentials` fail against a
-kubeconfig that lives only in the home. The lock is taken in that directory
-instead, while its `config` entry symlinks to `~/.kube/config` so your kubeconfig
-still lands in the home and survives the container. Run `sandbox-kubeconfig` to
-rebuild it by hand.
+`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`,
+because kubectl cannot take its lock file on the sandbox home — `image/sandbox-kubeconfig`
+explains why. That directory's `config` entry symlinks to `~/.kube/config`, so
+your kubeconfig still lands in the home and survives the container. Run
+`sandbox-kubeconfig` to rebuild it by hand.
 
 Bring-up takes roughly 30 s and ~800 MB of RAM. The launch hook doesn't wait for
 it, so you get a shell immediately and the cluster converges behind you. If it
@@ -189,7 +228,8 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 
 - **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
-  `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
+  `man-db` (reads `man sandbox`), `procps`, `python3` (parses `config.toml`),
+  `sudo`, `unzip`, `zsh`.
 - **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
   mount).
 - A **non-root user** (UID matched to your host for bind-mount ownership) with
@@ -198,6 +238,10 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 - **podman** wired for rootful use via a `sudo podman` shim (the `podman`
   package itself comes from `config.toml`).
 - A launcher that drops you into a zellij session named after the sandbox.
+- A `sandbox(7)` man page written from `config.toml` at build time, and a line
+  at launch pointing at it.
+- Commands run by Claude Code treated as background work — see
+  [Claude in a sandbox](#claude-in-a-sandbox).
 
 Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `config.toml`,
 not the base image.

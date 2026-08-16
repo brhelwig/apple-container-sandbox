@@ -1,40 +1,33 @@
 #!/usr/bin/env bash
-# Bring a single-node k3s cluster up or down inside a sandbox.
-#
-#   sandbox-k3s up | down | status | enabled
-#
-# Cluster state lives on a sparse ext4 image in $HOME, loop-mounted at
-# /var/lib/rancher. It can't live on the home dir directly: the sandbox home is
-# virtiofs, where mknod is denied, so overlayfs whiteouts — which containerd's
-# snapshotter needs to delete files from a lower layer — are impossible.
 set -euo pipefail
 
-# Overridable so the config parsing can be tested outside a container.
+usage() {
+    cat <<'EOF'
+Bring a single-node k3s cluster up or down inside a sandbox.
+
+  sandbox-k3s up | down | status | enabled
+
+Cluster state lives on a sparse ext4 image in $HOME, loop-mounted at
+/var/lib/rancher, and survives the container.
+EOF
+}
+
 CONFIG="${SANDBOX_K3S_CONFIG:-/etc/sandbox-config.toml}"
+# Not the home dir: that is virtiofs, where mknod is denied, so the overlayfs
+# whiteouts containerd's snapshotter needs to delete a file from a lower layer
+# are impossible.
 STATE_DIR=/var/lib/rancher
 LOG=/var/log/k3s.log
 BRIDGE=br-k3s
-# The k3s server process, anchored so it can't match this script's own argv.
+# Anchored so it cannot match this script's own argv.
 K3S_PATTERN='^/usr/local/bin/k3s server'
 
-# cfg <key> <default>: read a [k3s] setting from the baked-in config.
-cfg() {
-    python3 - "$CONFIG" "$1" "$2" <<'PY'
-import sys, tomllib
-try:
-    with open(sys.argv[1], "rb") as f:
-        val = tomllib.load(f).get("k3s", {}).get(sys.argv[2])
-except OSError:
-    val = None
-if isinstance(val, bool):
-    val = "true" if val else "false"
-print(sys.argv[3] if val in (None, "") else val)
-PY
-}
+# shellcheck source=sandbox-config.sh
+. "${SANDBOX_CONFIG_LIB:-/etc/sandbox-config.sh}"
 
-# sandbox_home: the sandbox user's home, which is the bind-mounted host dir.
-# Resolved from SUDO_USER rather than $HOME because sudo's default env_reset
-# would otherwise hand us root's home after the re-exec below.
+cfg() { sandbox_config "$CONFIG" k3s "$1" "$2"; }
+
+# sudo's default env_reset would hand us root's home after the re-exec in main.
 sandbox_home() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
@@ -45,13 +38,10 @@ sandbox_home() {
 disk_img()  { printf '%s/.sandbox-k3s.img\n' "$(sandbox_home)"; }
 running()   { pgrep -f "$K3S_PATTERN" >/dev/null 2>&1; }
 
-# disk_loop: the loop device already backing the cluster disk, if any.
 disk_loop() { losetup -j "$(disk_img)" 2>/dev/null | head -1 | cut -d: -f1; }
 
-# enabled: 0 when [k3s].enabled is true. Used by the launch hook.
 enabled() { [ "$(cfg enabled false)" = "true" ]; }
 
-# mount_state: ensure the cluster disk exists and is mounted at $STATE_DIR.
 mount_state() {
     local img loop
     img="$(disk_img)"
@@ -69,17 +59,17 @@ mount_state() {
     mount "$loop" "$STATE_DIR"
 }
 
-# prepare_kernel: /proc/sys ships read-only, but k3s requires IP forwarding.
+# /proc/sys ships read-only, but k3s requires IP forwarding.
 prepare_kernel() {
     mount -o remount,rw /proc/sys 2>/dev/null || true
     sysctl -qw net.ipv4.ip_forward=1
     sysctl -qw net.ipv6.conf.all.forwarding=1 2>/dev/null || true
 }
 
-# prepare_cgroups: kubelet creates /sys/fs/cgroup/kubepods and needs domain
-# controllers there. cgroup v2 forbids that while the root cgroup holds
-# processes of its own, so move them into a child first, then delegate. Without
-# this kubelet dies with "cannot enter cgroupv2 ... invalid state".
+# kubelet creates /sys/fs/cgroup/kubepods and needs domain controllers there.
+# cgroup v2 forbids that while the root cgroup holds processes of its own, so
+# move them into a child first, then delegate. Without this kubelet dies with
+# "cannot enter cgroupv2 ... invalid state".
 prepare_cgroups() {
     local type procs pid
     type="$(cat /sys/fs/cgroup/cgroup.type 2>/dev/null || echo domain)"
@@ -103,10 +93,10 @@ prepare_cgroups() {
     fi
 }
 
-# prepare_network: give the node a fixed address. Apple Container issues a new
-# DHCP lease every time a container is recreated, but persisted cluster state
-# pins the node IP — a changed address makes k3s refuse to start networking
-# ("failed to find interface with specified node ip").
+# The node needs a fixed address. Apple Container issues a new DHCP lease every
+# time a container is recreated, but persisted cluster state pins the node IP —
+# a changed address makes k3s refuse to start networking ("failed to find
+# interface with specified node ip").
 prepare_network() {
     ip link show "$BRIDGE" >/dev/null 2>&1 && return 0
     ip link add "$BRIDGE" type bridge
@@ -114,11 +104,11 @@ prepare_network() {
     ip link set "$BRIDGE" up
 }
 
-# publish_kubeconfig: add the cluster to the sandbox kubeconfig once k3s has
-# written its own. The server writes that file some seconds after it starts, and
-# `up` deliberately returns before then, so wait for it in the background rather
-# than holding up the shell. Runs as the sandbox user, so anything it creates in
-# the home stays owned by them.
+# Add the cluster to the sandbox kubeconfig once k3s has written its own. The
+# server writes that file some seconds after it starts, and `up` deliberately
+# returns before then, so wait for it in the background rather than holding up
+# the shell. Runs as the sandbox user, so anything it creates in the home stays
+# owned by them.
 publish_kubeconfig() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
@@ -133,6 +123,28 @@ publish_kubeconfig() {
     ) >/dev/null 2>&1 &
 }
 
+# Overrule the OOM score kubelet gives itself. It sets -999 as the agent starts,
+# which would make the cluster the last thing the kernel kills instead of the
+# first — the sandbox should lose its cluster before it loses the session it is
+# being used from. Waits for that value rather than racing it, since a write
+# before kubelet's is simply lost. The containers keep the scores kubelet
+# computes for them from their quality of service class, which this does not
+# reach.
+deprioritize_server() {
+    (
+        local pid adj
+        for _ in $(seq 1 180); do
+            pid="$(pgrep -f "$K3S_PATTERN" | head -1)"
+            if [ -n "$pid" ]; then
+                adj="$(cat "/proc/$pid/oom_score_adj" 2>/dev/null || echo 0)"
+                [ "$adj" -lt 0 ] && break
+            fi
+            sleep 1
+        done
+        [ -n "${pid:-}" ] && echo 1000 > "/proc/$pid/oom_score_adj"
+    ) >/dev/null 2>&1 &
+}
+
 up() {
     if running; then echo "k3s is already running"; return 0; fi
     mount_state
@@ -141,11 +153,13 @@ up() {
     prepare_network
     [ -s /etc/machine-id ] || tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id
     publish_kubeconfig
-    setsid nohup /usr/local/bin/k3s server \
+    # sandbox-background execs, so the argv K3S_PATTERN matches is unchanged.
+    setsid nohup /usr/local/bin/sandbox-background /usr/local/bin/k3s server \
         --write-kubeconfig-mode 644 \
         --node-ip "$(cfg node_ip 10.99.0.1)" \
         --flannel-iface "$BRIDGE" \
         >> "$LOG" 2>&1 < /dev/null &
+    deprioritize_server
     echo "k3s starting in the background; watch it with: sandbox-k3s status"
 }
 
@@ -195,15 +209,12 @@ main() {
     case "$cmd" in
         enabled) enabled && return 0 || return 1 ;;
         up|down|status) ;;
-        -h|--help)
-            sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
-            return 0 ;;
+        -h|--help) usage; return 0 ;;
         *)
             echo "usage: sandbox-k3s [up|down|status|enabled]" >&2
             return 2 ;;
     esac
 
-    # up/down/status all need root (mount, cgroups, netlink, kubeconfig).
     if [ "$(id -u)" -ne 0 ]; then
         exec sudo "$0" "$cmd"
     fi

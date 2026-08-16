@@ -7,33 +7,34 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-# 1. Base toolchain (python3 is needed to parse config.toml).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl file git git-lfs gnupg \
-        locales procps python3 sudo unzip zsh \
+# Base toolchain (python3 parses config.toml; man-db reads sandbox(7), and
+# debian:bookworm ships no man binary at all). A build arg because the man page
+# step below lists the same packages.
+ARG BASE_PACKAGES="build-essential ca-certificates curl file git git-lfs gnupg locales man-db procps python3 sudo unzip zsh"
+RUN apt-get update && apt-get install -y --no-install-recommends $BASE_PACKAGES \
     && git lfs install --system \
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. config.toml -> apt packages (root).
+# config.toml -> apt packages (root).
 COPY config.toml /tmp/config.toml
 RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
     && if [ -n "$pkgs" ]; then apt-get update \
        && apt-get install -y --no-install-recommends $pkgs \
        && rm -rf /var/lib/apt/lists/*; fi
 
-# 3. podman: rootful shim + registry config (podman binary came from step 2).
+# podman: rootful shim + registry config (the binary comes from the apt step).
 RUN mkdir -p /etc/containers/registries.conf.d \
     && printf 'unqualified-search-registries = ["docker.io"]\n' \
         > /etc/containers/registries.conf.d/00-unqualified-docker.conf \
     && printf '#!/bin/sh\nexec sudo /usr/bin/podman "$@"\n' > /usr/local/bin/podman \
     && chmod +x /usr/local/bin/podman
 
-# 3b. config.toml -> k3s. Runtime deps plus the latest stable k3s binary, which
-#     is deliberately unpinned to match how [brew] formulae track latest. The
-#     kernel needs nothing: veth, bridge/br_netfilter, vxlan, netfilter/NAT and
-#     overlayfs are all built in (CONFIG_MODULES=n, so k3s's modprobe warnings
-#     at startup are expected and harmless).
+# config.toml -> k3s. Runtime deps plus the latest stable k3s binary, which is
+# deliberately unpinned to match how [brew] formulae track latest. The kernel
+# needs nothing: veth, bridge/br_netfilter, vxlan, netfilter/NAT and overlayfs
+# are all built in (CONFIG_MODULES=n, so k3s's modprobe warnings at startup are
+# expected and harmless).
 RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("k3s",{}).get("enabled") else 1)'; then \
         apt-get update \
         && apt-get install -y --no-install-recommends \
@@ -53,11 +54,10 @@ RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/con
         && /usr/local/bin/k3s --version; \
     fi
 
-# 3c. config.toml -> the VS Code CLI, which `sandbox-code` runs as a tunnel. The
-#     download is the alpine asset because there is no cli-linux-* build; it is
-#     statically linked, so it runs on Debian. Unpinned, like the k3s binary.
-#     The download endpoint returned a 504 and failed a build here, so the fetch
-#     retries rather than taking the first answer.
+# config.toml -> the VS Code CLI, which `sandbox-code` runs as a tunnel. The
+# download is the alpine asset because there is no cli-linux-* build; it is
+# statically linked, so it runs on Debian. Unpinned, like the k3s binary. The
+# download endpoint is unreliable, so the fetch retries.
 RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("vscode",{}).get("enabled") else 1)'; then \
         case "$(dpkg --print-architecture)" in \
           arm64) asset=cli-alpine-arm64 ;; \
@@ -71,7 +71,7 @@ RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/con
         && /usr/local/bin/code --version; \
     fi
 
-# 4. Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
+# Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
 RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME \
@@ -81,23 +81,23 @@ USER $USERNAME
 ENV HOME=/home/$USERNAME SHELL=/usr/bin/zsh
 WORKDIR $HOME
 
-# 5. Homebrew under /home/linuxbrew (survives the runtime $HOME bind mount).
+# Homebrew under /home/linuxbrew (survives the runtime $HOME bind mount).
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-# 6. config.toml -> brew taps. Trust each tap so its casks can install; trust
-#    is a no-op/irrelevant for formula-only taps, so a failure there is ignored
-#    (untrusted casks still fail at install time, so this doesn't weaken safety).
+# config.toml -> brew taps. Trust each tap so its casks can install; trust is
+# irrelevant for formula-only taps, so a failure there is ignored (untrusted
+# casks still fail at install time, so this doesn't weaken safety).
 RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
     && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
 
-# 7. config.toml -> brew formulae.
+# config.toml -> brew formulae.
 RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("formulae",[])))')" \
     && if [ -n "$formulae" ]; then brew install $formulae; fi
 
-# 8. config.toml -> brew casks. Cask linking can emit a benign trailing
-#    "Broken pipe" (non-zero exit) in a non-TTY build even though the cask
-#    installed; tolerate that when the cask actually linked / is listed.
+# config.toml -> brew casks. Cask linking can emit a benign trailing "Broken
+# pipe" (non-zero exit) in a non-TTY build even though the cask installed;
+# tolerate that when the cask actually linked / is listed.
 RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("casks",[])))')" \
     && for c in $casks; do \
          out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
@@ -110,11 +110,11 @@ RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/c
          fi; \
        done
 
-# 9. config.toml -> post_install commands (fail the build on any error).
+# config.toml -> post_install commands (fail the build on any error).
 RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
     && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
 
-# 10. Shell seed into /etc/skel (root); entrypoint copies it into a fresh home.
+# Shell seed into /etc/skel (root); entrypoint copies it into a fresh home.
 USER root
 RUN HOME=/etc/skel RUNZSH=no CHSH=no \
         sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
@@ -122,25 +122,46 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
     && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
-# 11. Entry points + sandbox helpers. config.toml lands at a stable path so
-#     runtime helpers (sandbox-k3s, sandbox-code) can read their settings from it.
+# Entry points + sandbox helpers. config.toml lands at a stable path so the
+# runtime helpers can read their settings from it.
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-code /usr/local/bin/sandbox-code
+COPY image/sandbox-welcome /usr/local/bin/sandbox-welcome
+COPY image/sandbox-background /usr/local/bin/sandbox-background
 COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
+COPY image/sandbox-nice.sh /etc/sandbox-nice.sh
+COPY image/sandbox-config.sh /etc/sandbox-config.sh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
-        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-welcome \
+        /usr/local/bin/sandbox-background /usr/local/bin/sandbox-kubeconfig
 
-# 11b. The kubeconfig shim dir. It has to sit on the container filesystem
-#      rather than the bind-mounted home: kubectl locks a kubeconfig with a
-#      mode-000 file alongside it, which virtiofs won't create. Its `config`
-#      entry is a symlink, so the kubeconfig still lands in the home and
-#      persists (see image/sandbox-kubeconfig).
+# The sandbox(7) man page, written from the same config.toml that installed the
+# tools, so `man sandbox` lists what is in this image. The welcome hook goes in
+# /etc/zsh/zshrc rather than the seeded ~/.zshrc, so it reaches a sandbox whose
+# home predates it. mandb builds the index man searches.
+COPY image/sandbox-manpage /tmp/sandbox-manpage
+RUN install -d /usr/local/share/man/man7 \
+    && python3 /tmp/sandbox-manpage /tmp/config.toml "$BASE_PACKAGES" \
+         > /usr/local/share/man/man7/sandbox.7 \
+    && rm -f /tmp/sandbox-manpage \
+    && mandb -q \
+    && man 7 sandbox > /dev/null \
+    && printf '\n[ -x /usr/local/bin/sandbox-welcome ] && /usr/local/bin/sandbox-welcome\n' \
+         >> /etc/zsh/zshrc
+
+# Claude's commands run as background work. The hook is in /etc/zsh/zshenv
+# rather than zshrc because the shell Claude spawns each command in is
+# non-interactive, and zshrc is for interactive shells only.
+RUN printf '\n[ -r /etc/sandbox-nice.sh ] && . /etc/sandbox-nice.sh\n' >> /etc/zsh/zshenv
+
+# The kubeconfig shim dir; see image/sandbox-kubeconfig for why it cannot sit
+# in the bind-mounted home.
 RUN install -d -o $USERNAME -g $USERNAME /var/lib/sandbox /var/lib/sandbox/kube
 ENV KUBECONFIG=/var/lib/sandbox/kube/config:/var/lib/sandbox/kube/k3s.yaml
 
