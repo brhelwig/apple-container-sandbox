@@ -21,6 +21,14 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   `gcloud container clusters get-credentials`. Writes still land in the home and
   persist. Set up by `sandbox-kubeconfig`, whether or not k3s is enabled.
 
+- `[vscode]` section in `config.toml` puts the VS Code CLI in each sandbox and
+  runs it as a Remote Tunnel, so a sandbox can be opened in VS Code Desktop or
+  vscode.dev from anywhere. The tunnel dials out, so nothing listens in the
+  sandbox and no port is published on the host. Manage it with
+  `sandbox-code login|up|down|status`; after one sign-in the tunnel starts at
+  launch, and the credentials persist in the sandbox home. Off by default — see
+  "Security scope" in the README for what a running tunnel exposes.
+
 ### Changed
 - A sandbox with `[k3s].enabled` runs with `--cap-add ALL`, because k3s requires
   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, which the default capability set omits.

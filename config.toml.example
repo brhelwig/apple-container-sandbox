@@ -31,3 +31,12 @@ cpus = 4        # optional; integer
 enabled = false
 disk = "8G"              # sparse ext4 image in the sandbox home holding cluster state
 node_ip = "10.99.0.1"    # fixed node address; must not collide with your LAN
+
+[vscode]
+# A VS Code Remote Tunnel, started automatically on launch, so the sandbox can
+# be opened in VS Code from anywhere. Sign in once per sandbox with
+# `sandbox-code login`.
+#
+# This setting is global, so enabling it applies to EVERY sandbox — see
+# "VS Code" and "Security scope" in the README.
+enabled = false

@@ -53,6 +53,24 @@ RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/con
         && /usr/local/bin/k3s --version; \
     fi
 
+# 3c. config.toml -> the VS Code CLI, which `sandbox-code` runs as a tunnel. The
+#     download is the alpine asset because there is no cli-linux-* build; it is
+#     statically linked, so it runs on Debian. Unpinned, like the k3s binary.
+#     The download endpoint returned a 504 and failed a build here, so the fetch
+#     retries rather than taking the first answer.
+RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("vscode",{}).get("enabled") else 1)'; then \
+        case "$(dpkg --print-architecture)" in \
+          arm64) asset=cli-alpine-arm64 ;; \
+          amd64) asset=cli-alpine-x64 ;; \
+          *) echo "unsupported arch for the VS Code CLI: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+        esac \
+        && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vscode-cli.tar.gz \
+             "https://code.visualstudio.com/sha/download?build=stable&os=$asset" \
+        && tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
+        && rm -f /tmp/vscode-cli.tar.gz \
+        && /usr/local/bin/code --version; \
+    fi
+
 # 4. Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
 RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
@@ -105,17 +123,18 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
 # 11. Entry points + sandbox helpers. config.toml lands at a stable path so
-#     runtime helpers (sandbox-k3s) can read their settings from it.
+#     runtime helpers (sandbox-k3s, sandbox-code) can read their settings from it.
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
+COPY image/sandbox-code /usr/local/bin/sandbox-code
 COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
-        /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-kubeconfig
 
 # 11b. The kubeconfig shim dir. It has to sit on the container filesystem
 #      rather than the bind-mounted home: kubectl locks a kubeconfig with a
