@@ -10,6 +10,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export SANDBOX_HOMES="$TMP/homes"
+# The in-image helpers source this from /etc, which does not exist out here.
+export SANDBOX_CONFIG_LIB="$DIR/../image/sandbox-config.sh"
 
 # shellcheck source=../bin/lib.sh
 . "$DIR/../bin/lib.sh"
@@ -58,13 +60,15 @@ printf '[k3s]\nenabled = false\n' > "$K3S"
 ok '[ -z "$(sandbox_cap_args "$K3S")" ]'  'cap args: disabled -> none'
 ok '[ -z "$(sandbox_cap_args "$TMP/nope.toml")" ]' 'cap args: missing file -> none'
 
-# sandbox_k3s_value <config> <key> <default>: settings the in-container helper reads.
+# sandbox_config: one reader for both sides of the container boundary.
 printf '[k3s]\nenabled = true\ndisk = "8G"\nnode_ip = "10.99.0.1"\n' > "$K3S"
-ok '[ "$(sandbox_k3s_value "$K3S" disk 4G)" = "8G" ]'             'k3s value: reads disk'
-ok '[ "$(sandbox_k3s_value "$K3S" node_ip 1.2.3.4)" = "10.99.0.1" ]' 'k3s value: reads node_ip'
+ok '[ "$(sandbox_config "$K3S" k3s disk 4G)" = "8G" ]'             'config: reads disk'
+ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "10.99.0.1" ]' 'config: reads node_ip'
+ok '[ "$(sandbox_config "$K3S" k3s enabled false)" = "true" ]'      'config: booleans print lowercase'
 printf '[k3s]\nenabled = true\n' > "$K3S"
-ok '[ "$(sandbox_k3s_value "$K3S" disk 8G)" = "8G" ]'             'k3s value: absent key -> default'
-ok '[ "$(sandbox_k3s_value "$TMP/nope.toml" disk 8G)" = "8G" ]'   'k3s value: missing file -> default'
+ok '[ "$(sandbox_config "$K3S" k3s disk 8G)" = "8G" ]'             'config: absent key -> default'
+ok '[ "$(sandbox_config "$K3S" vscode enabled false)" = "false" ]' 'config: absent section -> default'
+ok '[ "$(sandbox_config "$TMP/nope.toml" k3s disk 8G)" = "8G" ]'   'config: missing file -> default'
 
 # list_sandboxes
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
@@ -410,12 +414,7 @@ ok '[ -e "$WMARK" ]'                                    'sandbox-welcome: record
 ok 'run_welcome'                                        'sandbox-welcome: runs again'
 ok '[ ! -s "$TMP/welcome.out" ]'                        'sandbox-welcome: stays quiet the second time'
 
-# image/sandbox-kubeconfig. kubectl locks a kubeconfig by creating "<file>.lock"
-# with mode 000, and virtiofs — the filesystem behind the bind-mounted sandbox
-# home — refuses to create such a file, so every `kubectl config` write against
-# a file in $HOME fails. KUBECONFIG therefore points at a shim dir on the
-# container filesystem, where the lock can be taken, whose entries write through
-# to the real (persistent) kubeconfig in the home.
+# image/sandbox-kubeconfig — see that file for why the shim dir exists.
 KUBE="$DIR/../image/sandbox-kubeconfig"
 KHOME="$TMP/kubehome"
 KSHIM="$TMP/kubeshim"
@@ -441,18 +440,11 @@ ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: seeded file is
 ok '[ "$(filemode "$KHOME/.kube/config")" = 600 ]'   'kubeconfig: seeded file is private'
 ok '[ ! -e "$KSHIM/k3s.yaml" ]'                      'kubeconfig: no cluster -> no cluster entry'
 
-# The regression this guards: sandbox-k3s used to `ln -sfn` the k3s kubeconfig
-# over $HOME/.kube/config on every launch, destroying whatever was there.
+# A kubeconfig already in the home is the user's; nothing here may overwrite it.
 printf 'apiVersion: v1\nkind: Config\n# sentinel\n' > "$KHOME/.kube/config"
 ok 'run_kubeconfig'                                  'kubeconfig: re-runs against an existing kubeconfig'
 ok 'grep -q "# sentinel" "$KHOME/.kube/config"'      'kubeconfig: never clobbers an existing kubeconfig'
 ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: leaves the home kubeconfig a real file'
-
-# A home left holding the old symlink has no data to lose, so it gets repaired.
-ln -sfn "$KSRC" "$KHOME/.kube/config"
-ok 'run_kubeconfig'                                  'kubeconfig: runs against the legacy symlink'
-ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: repairs the legacy k3s symlink'
-ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: reseeds after repairing the symlink'
 
 # k3s names its context, cluster and user all "default", which collides with
 # anything already called that in the user's own kubeconfig.

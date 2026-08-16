@@ -56,21 +56,21 @@ Claude spawns each command in its own shell, and that shell sets all three on
 itself before the command starts. Every process under it inherits them. A shell
 you type in keeps its own standing, and so do claude and zellij.
 
-The OOM setting goes to the maximum rather than something milder because it has
-to: a sandbox holds no `CAP_SYS_RESOURCE`, so claude cannot be made harder to
-kill, only its commands easier. `ionice` has an effect only under an I/O
-scheduler that implements priority, which is unverified for the Apple Container
-guest kernel; the CPU and memory parts do not depend on it.
+The OOM setting goes to the maximum rather than something milder because a
+sandbox without k3s holds no `CAP_SYS_RESOURCE`: a process cannot lower its OOM
+score back below where it started, so claude cannot be made harder to kill, only
+its commands easier. (A k3s sandbox runs with `--cap-add ALL` and could do it
+the other way around; the setting is the same for both.) `ionice` has an effect
+only under an I/O scheduler that implements priority, which is unverified for
+the Apple Container guest kernel; the CPU and memory parts do not depend on it.
 
 Run anything else the same way with `sandbox-background <command>`.
 
 A configured k3s cluster starts through that wrapper, so k3s and what it runs
-are niced and in the idle I/O class as well. OOM scores there are not
-inherited: kubelet gives itself `-999` as it starts, which would make the
-cluster the last thing killed rather than the first, so `sandbox-k3s` overrules
-it with 1000 once kubelet has applied it. Each pod container keeps the score
-kubelet computes from its quality of service class — a cluster-critical pod
-sits at `-997` and stays there.
+are niced and in the idle I/O class as well. Its OOM score is set rather than
+inherited, because kubelet gives itself one — `deprioritize_server` in
+`image/sandbox-k3s` covers the details. Each pod container keeps the score
+kubelet computes from its quality of service class.
 
 ## Configuring the sandbox (`config.toml`)
 
@@ -147,14 +147,11 @@ sandbox-k3s up        # start it again
 The cluster is added alongside whatever is already in `~/.kube/config`; nothing
 there is modified, so remote clusters keep working next to the local one.
 
-`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`.
-kubectl locks a kubeconfig by creating a mode-000 file next to it, and virtiofs —
-the filesystem behind the bind-mounted sandbox home — refuses to create one, so
-`kubectl config` and `gcloud container clusters get-credentials` fail against a
-kubeconfig that lives only in the home. The lock is taken in that directory
-instead, while its `config` entry symlinks to `~/.kube/config` so your kubeconfig
-still lands in the home and survives the container. Run `sandbox-kubeconfig` to
-rebuild it by hand.
+`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`,
+because kubectl cannot take its lock file on the sandbox home — `image/sandbox-kubeconfig`
+explains why. That directory's `config` entry symlinks to `~/.kube/config`, so
+your kubeconfig still lands in the home and survives the container. Run
+`sandbox-kubeconfig` to rebuild it by hand.
 
 Bring-up takes roughly 30 s and ~800 MB of RAM. The launch hook doesn't wait for
 it, so you get a shell immediately and the cluster converges behind you. If it

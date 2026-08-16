@@ -114,9 +114,9 @@ def main():
     add(".TP")
     add("sandbox\\-kubeconfig")
     add(
-        "Rebuild the kubeconfig that KUBECONFIG points at. It lives outside the "
-        "home because kubectl locks a kubeconfig with a mode\\-000 file, which the "
-        "filesystem behind the home mount refuses to create."
+        "Rebuild the kubeconfig that KUBECONFIG points at. It lives outside "
+        "the home so that kubectl can take its lock file; writes still land in "
+        "the home and persist."
     )
     add(".TP")
     add("podman")
@@ -157,11 +157,9 @@ def main():
         add(".PP")
         add(
             "The cluster starts the same way, so k3s and what it runs are niced "
-            "and in the idle I/O class too. Their OOM scores are not inherited: "
-            "kubelet gives itself \\-999 as it starts, and sandbox\\-k3s "
-            "overrules that with 1000 once it has. Each container keeps the "
-            "score kubelet computes for it from its quality of service class, "
-            "which nothing here changes."
+            "and in the idle I/O class too. Its OOM score is set rather than "
+            "inherited, since kubelet assigns its own. Each container keeps the "
+            "score kubelet computes for it from its quality of service class."
         )
 
     add(".SH OPTIONAL FEATURES")

@@ -1,22 +1,24 @@
 #!/bin/sh
-# Run a command as background work: niced, idle I/O, first in line for the OOM
-# killer. Everything the command starts inherits all three.
-#
-#   sandbox-background <command> [args...]
-#
-# The settings land on this process, which then becomes the command through
-# exec, so the command carries them from its first instruction. See
-# /etc/sandbox-nice.sh, which is also what demotes the commands Claude runs.
 set -eu
 
+usage() {
+    cat <<'EOF'
+Run a command as background work: niced, idle I/O, first in line for the OOM
+killer. Everything the command starts inherits all three.
+
+  sandbox-background <command> [args...]
+EOF
+}
+
 if [ "$#" -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
-    sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+    usage
     [ "$#" -eq 0 ] && exit 2
     exit 0
 fi
 
-# Overridable so this can be tested outside a container.
 # shellcheck source=sandbox-nice.sh
 . "${SANDBOX_NICE:-/etc/sandbox-nice.sh}"
+# Set on this process, which then becomes the command, so the command carries
+# them from its first instruction.
 sandbox_deprioritize
 exec "$@"
