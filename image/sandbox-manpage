@@ -121,6 +121,13 @@ def main():
     add(".TP")
     add("podman")
     add("Containers inside the sandbox. Runs rootful through sudo.")
+    add(".TP")
+    add("sandbox\\-background <command>")
+    add(
+        "Run a command as background work: niced to 10, idle I/O class, and "
+        "first in line for the OOM killer. Everything the command starts "
+        "inherits all three."
+    )
     if k3s:
         add(".TP")
         add("sandbox\\-k3s up | down | status")
@@ -134,6 +141,27 @@ def main():
         add(
             "The VS Code Remote Tunnel, which starts at launch once you have "
             "signed in. Its log is ~/.sandbox\\-code.log."
+        )
+
+    add(".SH COMMANDS RUN BY CLAUDE")
+    add(
+        "A command that Claude Code runs is niced to 10, put in the idle I/O "
+        "class, and made the first thing the kernel kills when the sandbox runs "
+        "out of memory. Claude spawns each command in its own shell, and that "
+        "shell applies all three to itself before the command starts, so "
+        "everything under it inherits them. A shell you type in is untouched, "
+        "and so are claude and zellij, which is the point: a command that goes "
+        "wrong loses one command rather than the session."
+    )
+    if k3s:
+        add(".PP")
+        add(
+            "The cluster starts the same way, so k3s and what it runs are niced "
+            "and in the idle I/O class too. Their OOM scores are not inherited: "
+            "kubelet gives itself \\-999 as it starts, and sandbox\\-k3s "
+            "overrules that with 1000 once it has. Each container keeps the "
+            "score kubelet computes for it from its quality of service class, "
+            "which nothing here changes."
         )
 
     add(".SH OPTIONAL FEATURES")
@@ -183,6 +211,9 @@ def main():
     add(".TP")
     add("~/.sandbox\\-seeded")
     add("Marks a home that has been seeded with the shell configuration.")
+    add(".TP")
+    add("/etc/sandbox\\-nice.sh")
+    add("What gives a command run by Claude the standing of background work.")
     add(".TP")
     add("/usr/local/share/man/man7/sandbox.7")
     add("This page.")
