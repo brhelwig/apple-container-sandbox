@@ -7,10 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-# 1. Base toolchain (python3 is needed to parse config.toml).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl file git git-lfs gnupg \
-        locales procps python3 sudo unzip zsh \
+# 1. Base toolchain (python3 parses config.toml; man-db reads sandbox(7), and
+#    debian:bookworm ships no man binary at all). The list is a build arg
+#    because step 11c names the same packages in the man page.
+ARG BASE_PACKAGES="build-essential ca-certificates curl file git git-lfs gnupg locales man-db procps python3 sudo unzip zsh"
+RUN apt-get update && apt-get install -y --no-install-recommends $BASE_PACKAGES \
     && git lfs install --system \
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
@@ -129,12 +130,28 @@ COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-code /usr/local/bin/sandbox-code
+COPY image/sandbox-welcome /usr/local/bin/sandbox-welcome
 COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
-        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-welcome \
+        /usr/local/bin/sandbox-kubeconfig
+
+# 11c. The sandbox(7) man page, written from the same config.toml that installed
+#      the tools, so `man sandbox` lists what is in this image. The welcome hook
+#      goes in /etc/zsh/zshrc rather than the seeded ~/.zshrc, so it reaches a
+#      sandbox whose home predates it. mandb builds the index man searches.
+COPY image/sandbox-manpage /tmp/sandbox-manpage
+RUN install -d /usr/local/share/man/man7 \
+    && python3 /tmp/sandbox-manpage /tmp/config.toml "$BASE_PACKAGES" \
+         > /usr/local/share/man/man7/sandbox.7 \
+    && rm -f /tmp/sandbox-manpage \
+    && mandb -q \
+    && man 7 sandbox > /dev/null \
+    && printf '\n[ -x /usr/local/bin/sandbox-welcome ] && /usr/local/bin/sandbox-welcome\n' \
+         >> /etc/zsh/zshrc
 
 # 11b. The kubeconfig shim dir. It has to sit on the container filesystem
 #      rather than the bind-mounted home: kubectl locks a kubeconfig with a

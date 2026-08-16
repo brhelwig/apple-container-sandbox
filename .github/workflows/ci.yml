@@ -30,7 +30,8 @@ jobs:
           shellcheck -x --severity=warning \
             bin/lib.sh bin/sandbox bin/sandbox-build bin/sandbox-src-hash \
             install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s \
-            image/sandbox-code image/sandbox-kubeconfig test/run.sh
+            image/sandbox-code image/sandbox-welcome image/sandbox-kubeconfig \
+            test/run.sh
 
       - name: hadolint
         run: |
@@ -104,6 +105,22 @@ jobs:
             'test -L /var/lib/sandbox/kube/config && test -f "$HOME/.kube/config"'
           docker run --rm "$IMAGE" bash -c 'kubectl config view >/dev/null'
 
+      # The page is generated from the config that built the image, so a row
+      # whose config lists podman must have podman in its page. The welcome
+      # runs from /etc/zsh/zshrc, and has to print for the first interactive
+      # shell of a container and for no other.
+      - name: Man page and welcome
+        env:
+          IMAGE: sandbox:${{ matrix.config }}
+        run: |
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox > page.txt
+          grep -q 'INSTALLED TOOLS' page.txt
+          grep -q 'podman' page.txt
+          docker run --rm --entrypoint bash "$IMAGE" -c \
+            'echo exit | zsh -i 2>&1 | grep -q "man sandbox"'
+          docker run --rm --entrypoint bash "$IMAGE" -c \
+            'echo exit | zsh -i >/dev/null 2>&1; echo exit | zsh -i 2>&1 | grep -q "man sandbox" && exit 1; exit 0'
+
       - name: k3s image contents
         if: matrix.config == 'k3s'
         env:
@@ -111,6 +128,7 @@ jobs:
         run: |
           docker run --rm --entrypoint k3s "$IMAGE" --version
           docker run --rm --entrypoint sandbox-k3s "$IMAGE" enabled
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-k3s'
 
       - name: vscode image contents
         if: matrix.config == 'vscode'
@@ -123,6 +141,7 @@ jobs:
           docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code up >/dev/null 2>&1'
           docker run --rm --entrypoint bash "$IMAGE" -c \
             'sandbox-code up 2>&1 | grep -q "sandbox-code login"'
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-code'
 
       - name: Optional tooling absent by default
         if: matrix.config == 'default'
@@ -133,3 +152,5 @@ jobs:
           docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-k3s enabled'
           docker run --rm --entrypoint bash "$IMAGE" -c '! command -v code'
           docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code enabled'
+          # The page tracks the config, so with both features off it says so.
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'Disabled'

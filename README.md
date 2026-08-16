@@ -30,6 +30,20 @@ home, so auth, config, and shell history persist across image rebuilds and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
 
+## Finding your way around a sandbox
+
+A sandbox can describe itself:
+
+```sh
+man sandbox
+```
+
+The page lists the tools installed in this sandbox, says where the home comes
+from and what survives a rebuild, and covers the `sandbox-*` helpers. It is
+written during the image build from the same `config.toml` that installs the
+tools, so it describes the image it ships in rather than a list someone keeps
+current by hand. Each freshly launched sandbox prints one line pointing at it.
+
 ## Configuring the sandbox (`config.toml`)
 
 Your config lives in `config.toml`, which is **gitignored** and seeded from the
@@ -189,7 +203,8 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 
 - **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
-  `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
+  `man-db` (reads `man sandbox`), `procps`, `python3` (parses `config.toml`),
+  `sudo`, `unzip`, `zsh`.
 - **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
   mount).
 - A **non-root user** (UID matched to your host for bind-mount ownership) with
@@ -198,6 +213,8 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 - **podman** wired for rootful use via a `sudo podman` shim (the `podman`
   package itself comes from `config.toml`).
 - A launcher that drops you into a zellij session named after the sandbox.
+- A `sandbox(7)` man page written from `config.toml` at build time, and a line
+  at launch pointing at it.
 
 Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `config.toml`,
 not the base image.
