@@ -289,6 +289,71 @@ ok 'grep -q -- "--accept-server-license-terms" "$TMP/code-stub.log"' \
                                                         'sandbox-code: up passes the license flag'
 ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names the tunnel'
 
+# image/sandbox-manpage. The page is what a sandbox can say about itself from
+# the inside, so its tool lists have to come from the config the image was
+# built with — a page that lists something the build didn't install is worse
+# than no page.
+MANGEN="$DIR/../image/sandbox-manpage"
+MCFG="$TMP/man.toml"
+MOUT="$TMP/sandbox.7"
+gen_man() { python3 "$MANGEN" "$MCFG" "${1:-}" > "$MOUT" 2>"$TMP/man.err"; }
+
+cat > "$MCFG" <<'TOML'
+[apt]
+packages = ["podman", "ripgrep"]
+[brew]
+taps = ["hashicorp/tap"]
+formulae = ["gh", "jq"]
+casks = ["tflint"]
+[post_install]
+commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
+[k3s]
+enabled = true
+[vscode]
+enabled = true
+TOML
+ok 'gen_man'                                            'sandbox-manpage: writes a page'
+ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
+ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: lists the apt packages'
+ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists the brew taps'
+ok 'grep -q "gh, jq" "$MOUT"'                           'sandbox-manpage: lists the formulae'
+ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists the casks'
+ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
+ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s when enabled'
+ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code when enabled'
+
+# The base toolchain comes from the same build argument that installs it, so
+# the page and the image cannot disagree about it.
+ok 'gen_man "curl man-db zsh"'                          'sandbox-manpage: accepts the base packages'
+ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
+
+# A hyphen has to reach troff escaped, or the name renders as a dash and stops
+# being the string you would type or search for.
+no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
+
+# A sandbox with nothing configured still gets a page, and it has to say the
+# lists are empty rather than leaving a heading with nothing under it.
+printf '[apt]\npackages = []\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing configured'
+ok '[ "$(grep -c "None configured." "$MOUT")" -ge 4 ]'  'sandbox-manpage: says so where a list is empty'
+no 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: omits sandbox-k3s when disabled'
+no 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: omits sandbox-code when disabled'
+ok 'grep -qF "Set enabled under [k3s]" "$MOUT"'         'sandbox-manpage: says how to enable k3s'
+ok 'grep -qF "Set enabled under [vscode]" "$MOUT"'      'sandbox-manpage: says how to enable the tunnel'
+
+# image/sandbox-welcome. Every interactive zsh runs it, so it prints on the
+# first one and stays quiet after: a pointer repeated in every zellij pane
+# stops being a pointer and becomes noise.
+WELCOME="$DIR/../image/sandbox-welcome"
+WMARK="$TMP/welcomed"
+run_welcome() { SANDBOX_WELCOME_MARKER="$WMARK" bash "$WELCOME" > "$TMP/welcome.out" 2>&1; }
+
+ok 'run_welcome'                                        'sandbox-welcome: runs'
+ok 'grep -q "man sandbox" "$TMP/welcome.out"'           'sandbox-welcome: names the man page'
+ok '[ -e "$WMARK" ]'                                    'sandbox-welcome: records that it printed'
+ok 'run_welcome'                                        'sandbox-welcome: runs again'
+ok '[ ! -s "$TMP/welcome.out" ]'                        'sandbox-welcome: stays quiet the second time'
+
 # image/sandbox-kubeconfig. kubectl locks a kubeconfig by creating "<file>.lock"
 # with mode 000, and virtiofs — the filesystem behind the bind-mounted sandbox
 # home — refuses to create such a file, so every `kubectl config` write against

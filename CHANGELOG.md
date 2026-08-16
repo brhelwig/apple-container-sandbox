@@ -29,6 +29,12 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   launch, and the credentials persist in the sandbox home. Off by default — see
   "Security scope" in the README for what a running tunnel exposes.
 
+- `man sandbox` inside a sandbox describes the sandbox and lists the tools
+  installed in it. The page is written during the build from the same
+  `config.toml` that installs them, so it holds for the image it ships in.
+  Every interactive shell of a fresh launch prints a line pointing at it, once.
+  `man-db` joins the base toolchain, since `debian:bookworm` carries no `man`.
+
 ### Changed
 - A sandbox with `[k3s].enabled` runs with `--cap-add ALL`, because k3s requires
   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, which the default capability set omits.
