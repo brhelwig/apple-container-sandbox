@@ -44,6 +44,34 @@ written during the image build from the same `config.toml` that installs the
 tools, so it describes the image it ships in rather than a list someone keeps
 current by hand. Each freshly launched sandbox prints one line pointing at it.
 
+## Claude in a sandbox
+
+A command that Claude Code runs is niced to 10, put in the idle I/O class, and
+made the first thing the kernel kills if the sandbox runs out of memory. So a
+build or a test Claude starts loses the contest for CPU, disk and memory rather
+than the session losing it — killing a command costs a command, killing claude
+or zellij costs the session.
+
+Claude spawns each command in its own shell, and that shell sets all three on
+itself before the command starts. Every process under it inherits them. A shell
+you type in keeps its own standing, and so do claude and zellij.
+
+The OOM setting goes to the maximum rather than something milder because it has
+to: a sandbox holds no `CAP_SYS_RESOURCE`, so claude cannot be made harder to
+kill, only its commands easier. `ionice` has an effect only under an I/O
+scheduler that implements priority, which is unverified for the Apple Container
+guest kernel; the CPU and memory parts do not depend on it.
+
+Run anything else the same way with `sandbox-background <command>`.
+
+A configured k3s cluster starts through that wrapper, so k3s and what it runs
+are niced and in the idle I/O class as well. OOM scores there are not
+inherited: kubelet gives itself `-999` as it starts, which would make the
+cluster the last thing killed rather than the first, so `sandbox-k3s` overrules
+it with 1000 once kubelet has applied it. Each pod container keeps the score
+kubelet computes from its quality of service class — a cluster-critical pod
+sits at `-997` and stays there.
+
 ## Configuring the sandbox (`config.toml`)
 
 Your config lives in `config.toml`, which is **gitignored** and seeded from the
@@ -215,6 +243,8 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 - A launcher that drops you into a zellij session named after the sandbox.
 - A `sandbox(7)` man page written from `config.toml` at build time, and a line
   at launch pointing at it.
+- Commands run by Claude Code treated as background work — see
+  [Claude in a sandbox](#claude-in-a-sandbox).
 
 Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `config.toml`,
 not the base image.
