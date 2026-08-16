@@ -363,10 +363,14 @@ if [ -e /proc/self/oom_score_adj ]; then
     # to keep theirs, or the change protects nothing. CLAUDECODE has to be
     # unset rather than left out: these tests run under Claude often enough,
     # and there it is already in the environment.
-    ok 'env -u CLAUDECODE bash -c ". \"$NICE\"; [ \"\$(nice)\" = 0 ]"' \
-                                                            'sandbox-nice: leaves other shells alone'
-    ok 'env -u CLAUDECODE bash -c ". \"$NICE\"; [ \"\$(cat /proc/self/oom_score_adj)\" = 0 ]"' \
-                                                            'sandbox-nice: leaves their OOM score alone'
+    #
+    # The claim is that the values are untouched, so each case compares against
+    # what that shell started with. Neither is 0 everywhere: a GitHub runner
+    # hands a shell a non-zero oom_score_adj.
+    unchanged() { env -u CLAUDECODE bash -c "before=\$($1); . \"$NICE\"; [ \"\$($1)\" = \"\$before\" ]"; }
+
+    ok 'unchanged nice'                                     'sandbox-nice: leaves other shells alone'
+    ok 'unchanged "cat /proc/self/oom_score_adj"'           'sandbox-nice: leaves their OOM score alone'
 
     # It runs in shells with -u set, and in ones where renice or ionice is
     # missing, so neither may fail the shell it was sourced into.
