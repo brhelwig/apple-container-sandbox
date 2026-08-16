@@ -131,13 +131,15 @@ COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-code /usr/local/bin/sandbox-code
 COPY image/sandbox-welcome /usr/local/bin/sandbox-welcome
+COPY image/sandbox-background /usr/local/bin/sandbox-background
 COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
+COPY image/sandbox-nice.sh /etc/sandbox-nice.sh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
         /usr/local/bin/sandbox-code /usr/local/bin/sandbox-welcome \
-        /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-background /usr/local/bin/sandbox-kubeconfig
 
 # 11c. The sandbox(7) man page, written from the same config.toml that installed
 #      the tools, so `man sandbox` lists what is in this image. The welcome hook
@@ -152,6 +154,11 @@ RUN install -d /usr/local/share/man/man7 \
     && man 7 sandbox > /dev/null \
     && printf '\n[ -x /usr/local/bin/sandbox-welcome ] && /usr/local/bin/sandbox-welcome\n' \
          >> /etc/zsh/zshrc
+
+# 11d. Claude's commands run as background work. The hook is in /etc/zsh/zshenv
+#      rather than zshrc because the shell Claude spawns each command in is
+#      non-interactive, and zshrc is for interactive shells only.
+RUN printf '\n[ -r /etc/sandbox-nice.sh ] && . /etc/sandbox-nice.sh\n' >> /etc/zsh/zshenv
 
 # 11b. The kubeconfig shim dir. It has to sit on the container filesystem
 #      rather than the bind-mounted home: kubectl locks a kubeconfig with a

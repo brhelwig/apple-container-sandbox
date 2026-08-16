@@ -133,6 +133,28 @@ publish_kubeconfig() {
     ) >/dev/null 2>&1 &
 }
 
+# deprioritize_server: overrule the OOM score kubelet gives itself. It sets
+# -999 as the agent starts, which would make the cluster the last thing the
+# kernel kills instead of the first — the sandbox should lose its cluster
+# before it loses the session it is being used from. Waits for that value
+# rather than racing it, since a write before kubelet's is simply lost. The
+# containers keep the scores kubelet computes for them from their quality of
+# service class, which this does not reach.
+deprioritize_server() {
+    (
+        local pid adj
+        for _ in $(seq 1 180); do
+            pid="$(pgrep -f "$K3S_PATTERN" | head -1)"
+            if [ -n "$pid" ]; then
+                adj="$(cat "/proc/$pid/oom_score_adj" 2>/dev/null || echo 0)"
+                [ "$adj" -lt 0 ] && break
+            fi
+            sleep 1
+        done
+        [ -n "${pid:-}" ] && echo 1000 > "/proc/$pid/oom_score_adj"
+    ) >/dev/null 2>&1 &
+}
+
 up() {
     if running; then echo "k3s is already running"; return 0; fi
     mount_state
@@ -141,11 +163,16 @@ up() {
     prepare_network
     [ -s /etc/machine-id ] || tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id
     publish_kubeconfig
-    setsid nohup /usr/local/bin/k3s server \
+    # Background work, like the commands Claude runs: the cluster and every
+    # pod under it lose the contest for CPU and disk rather than the session
+    # losing it. sandbox-background execs, so the argv K3S_PATTERN matches is
+    # unchanged.
+    setsid nohup /usr/local/bin/sandbox-background /usr/local/bin/k3s server \
         --write-kubeconfig-mode 644 \
         --node-ip "$(cfg node_ip 10.99.0.1)" \
         --flannel-iface "$BRIDGE" \
         >> "$LOG" 2>&1 < /dev/null &
+    deprioritize_server
     echo "k3s starting in the background; watch it with: sandbox-k3s status"
 }
 

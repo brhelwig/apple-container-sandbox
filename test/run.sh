@@ -341,6 +341,62 @@ no 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: omits 
 ok 'grep -qF "Set enabled under [k3s]" "$MOUT"'         'sandbox-manpage: says how to enable k3s'
 ok 'grep -qF "Set enabled under [vscode]" "$MOUT"'      'sandbox-manpage: says how to enable the tunnel'
 
+# image/sandbox-nice.sh. Sourced by every shell Claude spawns a command in, so
+# what it does to that shell is what every command inherits. The assertions read
+# the shell's own state after sourcing, since a setting that silently failed to
+# apply looks exactly like one that was never asked for.
+#
+# Linux only: macOS has no /proc and no ionice, and this runs on the host as
+# well as in CI.
+NICE="$DIR/../image/sandbox-nice.sh"
+if [ -e /proc/self/oom_score_adj ]; then
+    # A subshell per case: nice and oom_score_adj are inherited, so applying
+    # them to the test harness itself would leak into every later case.
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(nice)\" = 10 ]"' \
+                                                            'sandbox-nice: nices the shell'
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(cat /proc/self/oom_score_adj)\" = 1000 ]"' \
+                                                            'sandbox-nice: volunteers for the OOM killer'
+    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; nice" | grep -q 10' \
+                                                            'sandbox-nice: a child inherits the nice value'
+
+    # Only Claude's shells. An interactive shell, zellij and claude itself have
+    # to keep theirs, or the change protects nothing. CLAUDECODE has to be
+    # unset rather than left out: these tests run under Claude often enough,
+    # and there it is already in the environment.
+    #
+    # The claim is that the values are untouched, so each case compares against
+    # what that shell started with. Neither is 0 everywhere: a GitHub runner
+    # hands a shell a non-zero oom_score_adj.
+    unchanged() { env -u CLAUDECODE bash -c "before=\$($1); . \"$NICE\"; [ \"\$($1)\" = \"\$before\" ]"; }
+
+    ok 'unchanged nice'                                     'sandbox-nice: leaves other shells alone'
+    ok 'unchanged "cat /proc/self/oom_score_adj"'           'sandbox-nice: leaves their OOM score alone'
+
+    # It runs in shells with -u set, and in ones where renice or ionice is
+    # missing, so neither may fail the shell it was sourced into.
+    ok 'CLAUDECODE=1 bash -uc ". \"$NICE\""'                'sandbox-nice: survives set -u'
+    ok 'CLAUDECODE=1 PATH=/nonexistent /bin/bash -c ". \"$NICE\""' \
+                                                            'sandbox-nice: survives a missing renice'
+
+    # image/sandbox-background, which puts a command under the same settings on
+    # purpose. sandbox-k3s starts the cluster through it, so the whole cluster
+    # and its pods run as background work.
+    BG="$DIR/../image/sandbox-background"
+    run_bg() { env -u CLAUDECODE SANDBOX_NICE="$NICE" sh "$BG" "$@"; }
+
+    ok '[ "$(run_bg nice)" = 10 ]'                          'sandbox-background: nices the command'
+    ok '[ "$(run_bg cat /proc/self/oom_score_adj)" = 1000 ]' \
+                                                            'sandbox-background: volunteers it for the OOM killer'
+    ok '[ "$(run_bg sh -c "sh -c nice")" = 10 ]'            'sandbox-background: what it starts inherits'
+
+    # It execs, so the command keeps its own argv — sandbox-k3s finds and stops
+    # the server by matching that.
+    no 'run_bg sh -c "cat /proc/\$\$/cmdline" | grep -qa sandbox-background' \
+                                                            'sandbox-background: execs, leaving argv alone'
+    no 'run_bg > /dev/null 2>&1'                            'sandbox-background: no command -> fails'
+    ok 'run_bg --help | grep -q "background work"'          'sandbox-background: --help explains it'
+fi
+
 # image/sandbox-welcome. Every interactive zsh runs it, so it prints on the
 # first one and stays quiet after: a pointer repeated in every zellij pane
 # stops being a pointer and becomes noise.
