@@ -2,7 +2,6 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-# shellcheck source=lib.sh
 . "$REPO/bin/lib.sh"
 
 USERNAME="${SANDBOX_USER:-${USER:-dev}}"
@@ -20,10 +19,6 @@ only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
 }
 
-# The home dir persists across recreation, so replacing a stale container
-# loses nothing. Every sandbox runs fully privileged, because k3s needs
-# CAP_SYS_ADMIN (mount, cgroups) and CAP_NET_ADMIN (iptables, netns), neither of
-# which is in Apple Container's default set.
 launch() {
     local name="$1" home image running_image
     home="$(sandbox_home_path "$name")"
@@ -37,7 +32,6 @@ launch() {
         if [ "$running_image" = "$image" ]; then
             exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
         fi
-        # Stale image — stop it so the container is recreated on the current one.
         container stop "$name" >/dev/null 2>&1 || true
     fi
 
@@ -100,7 +94,7 @@ rename_sandbox() {
 main() {
     case "${1:-}" in
         -h|--help) usage; return 0 ;;
-        "") ;;  # fall through to menu
+        "") ;;
         *) create_and_launch "$1"; return $? ;;
     esac
 

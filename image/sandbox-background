@@ -16,9 +16,6 @@ if [ "$#" -eq 0 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     exit 0
 fi
 
-# shellcheck source=sandbox-nice.sh
 . "${SANDBOX_NICE:-/etc/sandbox-nice.sh}"
-# Set on this process, which then becomes the command, so the command carries
-# them from its first instruction.
 sandbox_deprioritize
 exec "$@"

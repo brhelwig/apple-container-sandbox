@@ -1,8 +1,5 @@
 failure-threshold: warning
 ignored:
-  # Formulae and apt packages track latest by design.
   - DL3008
-  # Reads the USERNAME build arg as a credential.
   - DL3064
-  # Pipes inside RUN are guarded by explicit exit-status checks.
   - DL4006
