@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
-# Build the shared sandbox image if the current source hash isn't built yet.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-# shellcheck source=lib.sh
 . "$REPO/bin/lib.sh"
 
 USERNAME="${SANDBOX_USER:-${USER:-dev}}"
 HASH="$("$REPO/bin/sandbox-src-hash")"
 IMAGE="${IMAGE:-sandbox:$HASH}"
 
-# stdout carries ONLY the image reference (callers capture it); all status and
-# build progress go to stderr.
 if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
     echo "$IMAGE already built." >&2
     echo "$IMAGE"
@@ -21,8 +17,6 @@ fi
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 
-# Keep a copy of the build output so a failure can be matched against causes
-# that are worth acting on.
 build() {
     container build \
         --build-arg "USERNAME=$USERNAME" \
@@ -53,13 +47,8 @@ EOF
     fi
 fi
 
-# Don't leave the (machine-wide) builder running idle; `container build`
-# auto-starts it again on the next build.
 container builder stop >/dev/null 2>&1 || true
 
-# Prune superseded sandbox images: delete any sandbox:<tag> that isn't the image
-# we just built and isn't in use by a running container (so a still-running
-# stale sandbox keeps its image until it's relaunched).
 {
     in_use="$(container ls 2>/dev/null | awk 'NR>1 {print $2}')"
     container image ls 2>/dev/null | awk '/^sandbox /{print $2}' | while read -r tag; do

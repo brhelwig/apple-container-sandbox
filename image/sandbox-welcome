@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# Point a new sandbox at `man sandbox`, once per launch.
-#
-# Run from /etc/zsh/zshrc, which every interactive zsh reads. That hook is on
-# the container filesystem rather than in the seeded ~/.zshrc, so it reaches
-# sandboxes whose home was created before this existed, and it stays out of the
-# non-interactive shells that commands and agents run in.
-#
-# The marker is in /tmp because the launcher runs each container with --rm (see
-# bin/sandbox): /tmp is empty at every launch and shared by every pane of the
-# zellij session, so the first pane prints and the rest stay quiet.
 set -euo pipefail
 
 MARKER="${SANDBOX_WELCOME_MARKER:-/tmp/.sandbox-welcomed}"
