@@ -5,6 +5,16 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Added
+- `sandbox -d <name>` launches a sandbox headless: the container runs detached
+  with no zellij session, so the cluster and the VS Code tunnel keep running
+  after the terminal closes. The launcher waits for the tunnel, prints where it
+  stands, and returns. `sandbox <name>` attaches a shell to a headless sandbox
+  at any time, and leaving that shell no longer stops it. In place of a zellij
+  session the container runs `sandbox-idle`, which holds it open and exits on
+  the stop signal so `container stop <name>` returns at once.
+- `sandbox` rejects an unrecognized option instead of treating it as a sandbox
+  name, so a mistyped flag no longer creates a sandbox called `--headles`.
+
 - Every sandbox runs a single-node Kubernetes cluster, started in the background
   at launch. Cluster state persists across container recreation and image
   rebuilds on a sparse ext4 image in the sandbox home (`[k3s].disk`, default

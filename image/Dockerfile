@@ -96,6 +96,7 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
+COPY image/sandbox-idle /usr/local/bin/sandbox-idle
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-code /usr/local/bin/sandbox-code
 COPY image/sandbox-welcome /usr/local/bin/sandbox-welcome
@@ -106,9 +107,10 @@ COPY image/sandbox-nice.sh /etc/sandbox-nice.sh
 COPY image/sandbox-config.sh /etc/sandbox-config.sh
 COPY config.toml /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
-        /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-k3s \
-        /usr/local/bin/sandbox-code /usr/local/bin/sandbox-welcome \
-        /usr/local/bin/sandbox-background /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-idle \
+        /usr/local/bin/sandbox-k3s /usr/local/bin/sandbox-code \
+        /usr/local/bin/sandbox-welcome /usr/local/bin/sandbox-background \
+        /usr/local/bin/sandbox-kubeconfig
 
 COPY image/sandbox-manpage /tmp/sandbox-manpage
 RUN install -d /usr/local/share/man/man7 \

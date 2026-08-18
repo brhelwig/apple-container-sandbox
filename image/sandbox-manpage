@@ -98,6 +98,13 @@ def main():
     add("sandbox\\-zellij")
     add("Attach to the zellij session named after the sandbox, or start it.")
     add(".TP")
+    add("sandbox\\-idle")
+    add(
+        "Hold a headless sandbox open. A headless launch runs this in place of a "
+        "zellij session, so the tunnel and the cluster keep running with no "
+        "terminal attached. See HEADLESS below."
+    )
+    add(".TP")
     add("sandbox\\-kubeconfig")
     add(
         "Rebuild the kubeconfig that KUBECONFIG points at. It lives outside "
@@ -160,6 +167,22 @@ def main():
         "The VS Code CLI is installed, and sandbox\\-code runs this sandbox as a "
         "Remote Tunnel you can open from VS Code anywhere. Sign in once with "
         "sandbox\\-code login."
+    )
+
+    add(".SH HEADLESS")
+    add(
+        "A sandbox can run with no terminal attached. On the Mac, launch it with "
+        "sandbox \\-d <name>: the container runs detached, the cluster and the "
+        "tunnel start as they always do, and the launcher prints where the "
+        "tunnel stands and then returns. Close the terminal and open the sandbox "
+        "from VS Code."
+    )
+    add(".PP")
+    add(
+        "sandbox <name> attaches a shell to a headless sandbox at any time, and "
+        "leaving that shell does not stop it. To stop it, delete the container "
+        "from the sandbox menu, or run container stop <name> on the Mac. The home "
+        "directory is kept either way."
     )
 
     add(".SH CHANGING WHAT IS INSTALLED")

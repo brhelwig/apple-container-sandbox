@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'USAGE'
+Hold a headless sandbox open. A headless launch runs this in place of a zellij
+session, so the tunnel and the cluster keep running with no terminal attached.
+
+  sandbox-idle
+USAGE
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+
+trap 'exit 0' TERM INT
+
+while true; do
+    sleep 86400 &
+    wait "$!" || true
+done

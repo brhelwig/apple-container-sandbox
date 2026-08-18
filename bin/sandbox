@@ -10,17 +10,49 @@ usage() {
     cat <<EOF
 sandbox — ad-hoc Linux sandboxes on Apple Container
 
-  sandbox            Open the menu (launch, or create/rename/delete).
-  sandbox <name>     Launch <name> (offers to create it if new).
-  sandbox --help     This help.
+  sandbox              Open the menu (launch, or create/rename/delete).
+  sandbox <name>       Launch <name> (offers to create it if new).
+  sandbox -d <name>    Launch <name> headless: no terminal, no zellij session.
+  sandbox --help       This help.
+
+A headless sandbox runs detached, with the VS Code tunnel and the cluster up, so
+you can close the terminal and open it from VS Code. Attach a shell to one at any
+time with \`sandbox <name>\`, and stop it from the menu or with
+\`container stop <name>\`.
 
 Homes live under \$SANDBOX_HOMES (default ~/Sandboxes). The container mounts
 only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
 }
 
+run_container() {
+    local name="$1" home="$2"
+    shift 2
+
+    local -a resource_args=()
+    while IFS= read -r line; do resource_args+=("$line"); done \
+        < <(sandbox_resource_args "$REPO/config.toml")
+
+    container run --rm \
+        --name "$name" \
+        --volume "$home:/home/$USERNAME" \
+        ${resource_args[@]+"${resource_args[@]}"} \
+        --cap-add ALL \
+        "$@"
+}
+
+report_tunnel() {
+    local name="$1" waited=0
+    while [ "$waited" -lt "${SANDBOX_TUNNEL_WAIT:-30}" ]; do
+        container exec "$name" /usr/local/bin/sandbox-code status >/dev/null 2>&1 && break
+        sleep 2
+        waited=$((waited + 2))
+    done
+    container exec "$name" /usr/local/bin/sandbox-code status || true
+}
+
 launch() {
-    local name="$1" home image running_image
+    local name="$1" headless="${2:-0}" home image running_image
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
@@ -30,6 +62,11 @@ launch() {
 
     if [ -n "$running_image" ]; then
         if [ "$running_image" = "$image" ]; then
+            if [ "$headless" = 1 ]; then
+                echo "'$name' is already running. Attach with: sandbox $name"
+                report_tunnel "$name"
+                return 0
+            fi
             exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
         fi
         container stop "$name" >/dev/null 2>&1 || true
@@ -37,25 +74,24 @@ launch() {
 
     container delete --force "$name" >/dev/null 2>&1 || true
 
-    local -a resource_args=()
-    while IFS= read -r line; do resource_args+=("$line"); done \
-        < <(sandbox_resource_args "$REPO/config.toml")
+    if [ "$headless" = 1 ]; then
+        run_container "$name" "$home" --detach "$image" \
+            /usr/local/bin/sandbox-idle >/dev/null
+        echo "'$name' is running headless. Attach a shell with: sandbox $name"
+        report_tunnel "$name"
+        return 0
+    fi
 
-    container run --rm --interactive --tty \
-        --name "$name" \
-        --volume "$home:/home/$USERNAME" \
-        ${resource_args[@]+"${resource_args[@]}"} \
-        --cap-add ALL \
-        "$image"
+    run_container "$name" "$home" --interactive --tty "$image"
 }
 
 create_and_launch() {
-    local name="$1"
+    local name="$1" headless="${2:-0}"
     if ! validate_name "$name"; then
         echo "Invalid name: '$name' (use letters, digits, '-', '_'; no leading dot)." >&2
         return 1
     fi
-    launch "$name"
+    launch "$name" "$headless"
 }
 
 remove_container() {
@@ -92,10 +128,19 @@ rename_sandbox() {
 }
 
 main() {
+    local headless=0
     case "${1:-}" in
         -h|--help) usage; return 0 ;;
+        -d|--headless) headless=1; shift ;;
+    esac
+
+    case "${1:-}" in
         "") ;;
-        *) create_and_launch "$1"; return $? ;;
+        -*)
+            echo "Unknown option: '$1'." >&2
+            usage >&2
+            return 2 ;;
+        *) create_and_launch "$1" "$headless"; return $? ;;
     esac
 
     ensure_gum || return 1
@@ -109,10 +154,10 @@ main() {
         "$NEW")
             local name
             name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
-            create_and_launch "$name" ;;
+            create_and_launch "$name" "$headless" ;;
         "$REN") rename_sandbox ;;
         "$DEL") delete_sandbox ;;
-        *) launch "$choice" ;;
+        *) launch "$choice" "$headless" ;;
     esac
 }
 
