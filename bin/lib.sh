@@ -1,11 +1,6 @@
 # shellcheck shell=bash
 # Shared helpers for the sandbox CLI. Sourced, not executed.
 
-# The config reader is shared with the in-image helpers, so a setting means the
-# same thing on both sides of the container boundary.
-# shellcheck source=../image/sandbox-config.sh
-. "$(dirname "${BASH_SOURCE[0]}")/../image/sandbox-config.sh"
-
 # Root dir holding one home dir per sandbox. Overridable for tests.
 : "${SANDBOX_HOMES:=$HOME/Sandboxes}"
 
@@ -34,18 +29,6 @@ for flag, key in (("--memory", "memory"), ("--cpus", "cpus")):
         print(flag)
         print(val)
 PY
-}
-
-sandbox_k3s_enabled() {
-    [ "$(sandbox_config "$1" k3s enabled false)" = "true" ]
-}
-
-# k3s needs CAP_SYS_ADMIN (mount, cgroups) and CAP_NET_ADMIN (iptables, netns),
-# neither of which is in the default set, so a k3s sandbox runs fully
-# privileged.
-sandbox_cap_args() {
-    sandbox_k3s_enabled "$1" || return 0
-    printf '%s\n' "--cap-add" "ALL"
 }
 
 # No terminal means no.

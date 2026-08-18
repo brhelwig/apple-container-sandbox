@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Bring a single-node k3s cluster up or down inside a sandbox.
 
-  sandbox-k3s up | down | status | enabled
+  sandbox-k3s up | down | status
 
 Cluster state lives on a sparse ext4 image in $HOME, loop-mounted at
 /var/lib/rancher, and survives the container.
@@ -39,8 +39,6 @@ disk_img()  { printf '%s/.sandbox-k3s.img\n' "$(sandbox_home)"; }
 running()   { pgrep -f "$K3S_PATTERN" >/dev/null 2>&1; }
 
 disk_loop() { losetup -j "$(disk_img)" 2>/dev/null | head -1 | cut -d: -f1; }
-
-enabled() { [ "$(cfg enabled false)" = "true" ]; }
 
 mount_state() {
     local img loop
@@ -87,8 +85,8 @@ prepare_cgroups() {
     if ! printf '%s\n' '+cpuset +cpu +io +memory +hugetlb +pids' \
             > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null; then
         echo "error: cannot delegate cgroup controllers to kubelet." >&2
-        echo "The sandbox is most likely missing CAP_SYS_ADMIN — check that" >&2
-        echo "[k3s].enabled is set in config.toml and relaunch the sandbox." >&2
+        echo "The sandbox is most likely missing CAP_SYS_ADMIN, which the" >&2
+        echo "launcher passes as --cap-add ALL. Relaunch the sandbox." >&2
         return 1
     fi
 }
@@ -207,11 +205,10 @@ status() {
 main() {
     local cmd="${1:-status}"
     case "$cmd" in
-        enabled) enabled && return 0 || return 1 ;;
         up|down|status) ;;
         -h|--help) usage; return 0 ;;
         *)
-            echo "usage: sandbox-k3s [up|down|status|enabled]" >&2
+            echo "usage: sandbox-k3s [up|down|status]" >&2
             return 2 ;;
     esac
 

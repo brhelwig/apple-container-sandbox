@@ -50,31 +50,11 @@ jobs:
   image:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        config: [default, k3s, vscode]
     steps:
       - uses: actions/checkout@v7
 
-      # Every optional section is named after its matrix row and gated on its
-      # own `enabled`, so one flip covers them all — scoped to the section, since
-      # more than one carries that key.
       - name: Seed config.toml
-        env:
-          SECTION: ${{ matrix.config }}
-        run: |
-          cp config.toml.example config.toml
-          if [ "$SECTION" != default ]; then
-            awk -v s="[$SECTION]" '
-              /^\[/     { in_s = ($0 == s) }
-              in_s && $0 == "enabled = false" { $0 = "enabled = true" }
-                        { print }' config.toml > seeded.toml
-            mv seeded.toml config.toml
-            [ "$(awk -v s="[$SECTION]" '
-              /^\[/ { in_s = ($0 == s) }
-              in_s && $0 ~ /^enabled = / { print $3 }' config.toml)" = true ]
-          fi
+        run: cp config.toml.example config.toml
 
       - uses: docker/setup-buildx-action@v4
 
@@ -84,19 +64,19 @@ jobs:
         with:
           context: .
           file: image/Dockerfile
-          tags: sandbox:${{ matrix.config }}
+          tags: sandbox:ci
           load: true
-          cache-from: type=gha,scope=${{ matrix.config }}
-          cache-to: type=gha,scope=${{ matrix.config }}
+          cache-from: type=gha
+          cache-to: type=gha
           no-cache: ${{ github.event_name == 'schedule' }}
 
-      # The entrypoint runs through sandbox-k3s on the k3s image, where an
-      # unprivileged `up` fails, and through sandbox-code on the vscode image,
-      # which is signed in to nothing — so this also covers a failed cluster or
-      # an unusable tunnel leaving the shell reachable.
+      # The entrypoint runs through sandbox-k3s, where an unprivileged `up`
+      # fails, and through sandbox-code, which is signed in to nothing — so this
+      # also covers a failed cluster or an unusable tunnel leaving the shell
+      # reachable.
       - name: Smoke test
         env:
-          IMAGE: sandbox:${{ matrix.config }}
+          IMAGE: sandbox:ci
         run: |
           docker run --rm "$IMAGE" bash -c 'test -f "$HOME/.sandbox-seeded" && test -f "$HOME/.zshrc"'
           docker run --rm "$IMAGE" bash -c 'zellij --version && gum --version && kubectl version --client'
@@ -106,13 +86,13 @@ jobs:
             'test -L /var/lib/sandbox/kube/config && test -f "$HOME/.kube/config"'
           docker run --rm "$IMAGE" bash -c 'kubectl config view >/dev/null'
 
-      # The page is generated from the config that built the image, so a row
-      # whose config lists podman must have podman in its page. The welcome
-      # runs from /etc/zsh/zshrc, and has to print for the first interactive
-      # shell of a container and for no other.
+      # The page is generated from the config that built the image, so a config
+      # that lists podman must have podman in its page. The welcome runs from
+      # /etc/zsh/zshrc, and has to print for the first interactive shell of a
+      # container and for no other.
       - name: Man page and welcome
         env:
-          IMAGE: sandbox:${{ matrix.config }}
+          IMAGE: sandbox:ci
         run: |
           docker run --rm --entrypoint man "$IMAGE" 7 sandbox > page.txt
           grep -q 'INSTALLED TOOLS' page.txt
@@ -126,7 +106,7 @@ jobs:
       # is how Claude Code spawns every command it runs.
       - name: Claude's commands run as background work
         env:
-          IMAGE: sandbox:${{ matrix.config }}
+          IMAGE: sandbox:ci
         run: |
           docker run --rm --entrypoint zsh -e CLAUDECODE=1 "$IMAGE" -c \
             '[ "$(nice)" = 10 ] && [ "$(cat /proc/self/oom_score_adj)" = 1000 ]'
@@ -137,40 +117,24 @@ jobs:
           docker run --rm --entrypoint sandbox-background "$IMAGE" sh -c \
             '[ "$(nice)" = 10 ] && [ "$(cat /proc/self/oom_score_adj)" = 1000 ]'
 
-      - name: k3s image contents
-        if: matrix.config == 'k3s'
+      - name: k3s is in every image
         env:
-          IMAGE: sandbox:${{ matrix.config }}
+          IMAGE: sandbox:ci
         run: |
           docker run --rm --entrypoint k3s "$IMAGE" --version
-          docker run --rm --entrypoint sandbox-k3s "$IMAGE" enabled
           docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-k3s'
           # The cluster launch goes through the wrapper, which execs, so the
           # argv sandbox-k3s matches to find and stop the server is unchanged.
           docker run --rm --entrypoint bash "$IMAGE" -c \
             'sandbox-background /usr/local/bin/k3s --version | grep -q "k3s version"'
 
-      - name: vscode image contents
-        if: matrix.config == 'vscode'
+      - name: The VS Code CLI is in every image
         env:
-          IMAGE: sandbox:${{ matrix.config }}
+          IMAGE: sandbox:ci
         run: |
           docker run --rm --entrypoint code "$IMAGE" --version
-          docker run --rm --entrypoint sandbox-code "$IMAGE" enabled
           # Signed in to nothing, `up` refuses and points at the login command.
           docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code up >/dev/null 2>&1'
           docker run --rm --entrypoint bash "$IMAGE" -c \
             'sandbox-code up 2>&1 | grep -q "sandbox-code login"'
           docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-code'
-
-      - name: Optional tooling absent by default
-        if: matrix.config == 'default'
-        env:
-          IMAGE: sandbox:${{ matrix.config }}
-        run: |
-          docker run --rm --entrypoint bash "$IMAGE" -c '! command -v k3s'
-          docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-k3s enabled'
-          docker run --rm --entrypoint bash "$IMAGE" -c '! command -v code'
-          docker run --rm --entrypoint bash "$IMAGE" -c '! sandbox-code enabled'
-          # The page tracks the config, so with both features off it says so.
-          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'Disabled'

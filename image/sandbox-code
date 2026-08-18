@@ -6,7 +6,7 @@ usage() {
 Run a VS Code Remote Tunnel inside a sandbox, so the sandbox can be opened in
 VS Code from any machine signed in to the same account.
 
-  sandbox-code login | up | down | status | enabled
+  sandbox-code login | up | down | status
 
 The tunnel dials out to the VS Code tunnel service, so nothing listens inside
 the sandbox and no port is published on the host. The CLI keeps its credentials
@@ -15,16 +15,8 @@ home, so one sign-in survives container recreation and image rebuilds.
 EOF
 }
 
-CONFIG="${SANDBOX_VSCODE_CONFIG:-/etc/sandbox-config.toml}"
 CODE="${SANDBOX_VSCODE_CLI:-/usr/local/bin/code}"
 LOG="$HOME/.sandbox-code.log"
-
-# shellcheck source=sandbox-config.sh
-. "${SANDBOX_CONFIG_LIB:-/etc/sandbox-config.sh}"
-
-cfg() { sandbox_config "$CONFIG" vscode "$1" "$2"; }
-
-enabled() { [ "$(cfg enabled false)" = "true" ]; }
 
 # The tunnel service accepts only lowercase letters, digits and hyphens.
 tunnel_name() {
@@ -32,14 +24,6 @@ tunnel_name() {
     name="$(hostname)"
     name="${name//[^a-zA-Z0-9-]/-}"
     printf '%s\n' "${name,,}"
-}
-
-# The CLI is only in the image when [vscode].enabled was set at build time.
-have_cli() {
-    [ -x "$CODE" ] && return 0
-    echo "The VS Code CLI isn't in this image. Set [vscode].enabled in" >&2
-    echo "config.toml and relaunch the sandbox to rebuild it." >&2
-    return 1
 }
 
 signed_in() { "$CODE" tunnel user show >/dev/null 2>&1; }
@@ -56,13 +40,11 @@ except (json.JSONDecodeError, AttributeError):
 }
 
 login() {
-    have_cli
     "$CODE" tunnel user login "$@"
     echo "Signed in. Start the tunnel with: sandbox-code up"
 }
 
 up() {
-    have_cli
     if running; then echo "the tunnel is already running"; return 0; fi
     if ! signed_in; then
         echo "Not signed in to the VS Code tunnel service." >&2
@@ -79,13 +61,11 @@ up() {
 }
 
 down() {
-    have_cli
     "$CODE" tunnel kill
     echo "tunnel stopped; the sign-in is kept"
 }
 
 status() {
-    have_cli
     if ! running; then
         echo "tunnel: not running"
         signed_in || echo "not signed in — run: sandbox-code login"
@@ -106,12 +86,11 @@ main() {
     local cmd="${1:-status}"
     shift || true
     case "$cmd" in
-        enabled) enabled && return 0 || return 1 ;;
         login) login "$@" ;;
         up|down|status) "$cmd" ;;
         -h|--help) usage ;;
         *)
-            echo "usage: sandbox-code [login|up|down|status|enabled]" >&2
+            echo "usage: sandbox-code [login|up|down|status]" >&2
             return 2 ;;
     esac
 }

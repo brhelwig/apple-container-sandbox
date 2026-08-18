@@ -15,6 +15,8 @@ export SANDBOX_CONFIG_LIB="$DIR/../image/sandbox-config.sh"
 
 # shellcheck source=../bin/lib.sh
 . "$DIR/../bin/lib.sh"
+# shellcheck source=../image/sandbox-config.sh
+. "$SANDBOX_CONFIG_LIB"
 
 pass=0 fail=0
 ok()  { if eval "$1"; then echo "ok   $2"; pass=$((pass+1)); else echo "FAIL $2"; fail=$((fail+1)); fi; }
@@ -43,31 +45,15 @@ printf '[apt]\npackages = []\n' > "$RES"
 ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
 ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
 
-# sandbox_k3s_enabled
-K3S="$TMP/k3s.toml"
-printf '[k3s]\nenabled = true\n' > "$K3S"
-ok 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: true -> yes'
-printf '[k3s]\nenabled = false\n' > "$K3S"
-no 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: false -> no'
-printf '[apt]\npackages = []\n' > "$K3S"
-no 'sandbox_k3s_enabled "$K3S"'          'k3s enabled: no section -> no'
-no 'sandbox_k3s_enabled "$TMP/nope.toml"' 'k3s enabled: missing file -> no'
-
-# sandbox_cap_args: k3s needs CAP_SYS_ADMIN/CAP_NET_ADMIN, absent from the default set.
-printf '[k3s]\nenabled = true\n' > "$K3S"
-ok '[ "$(sandbox_cap_args "$K3S" | tr "\n" " ")" = "--cap-add ALL " ]' 'cap args: enabled -> --cap-add ALL'
-printf '[k3s]\nenabled = false\n' > "$K3S"
-ok '[ -z "$(sandbox_cap_args "$K3S")" ]'  'cap args: disabled -> none'
-ok '[ -z "$(sandbox_cap_args "$TMP/nope.toml")" ]' 'cap args: missing file -> none'
-
 # sandbox_config: one reader for both sides of the container boundary.
-printf '[k3s]\nenabled = true\ndisk = "8G"\nnode_ip = "10.99.0.1"\n' > "$K3S"
+K3S="$TMP/k3s.toml"
+printf '[k3s]\ndisk = "8G"\nnode_ip = "10.99.0.1"\nenabled = true\n' > "$K3S"
 ok '[ "$(sandbox_config "$K3S" k3s disk 4G)" = "8G" ]'             'config: reads disk'
 ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "10.99.0.1" ]' 'config: reads node_ip'
 ok '[ "$(sandbox_config "$K3S" k3s enabled false)" = "true" ]'      'config: booleans print lowercase'
-printf '[k3s]\nenabled = true\n' > "$K3S"
-ok '[ "$(sandbox_config "$K3S" k3s disk 8G)" = "8G" ]'             'config: absent key -> default'
-ok '[ "$(sandbox_config "$K3S" vscode enabled false)" = "false" ]' 'config: absent section -> default'
+printf '[k3s]\ndisk = "8G"\n' > "$K3S"
+ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "1.2.3.4" ]' 'config: absent key -> default'
+ok '[ "$(sandbox_config "$K3S" resources memory 1G)" = "1G" ]'     'config: absent section -> default'
 ok '[ "$(sandbox_config "$TMP/nope.toml" k3s disk 8G)" = "8G" ]'   'config: missing file -> default'
 
 # list_sandboxes
@@ -194,66 +180,19 @@ run_launch() {
 
 run_launch
 ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container run'
-no 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s off -> no --cap-add'
+ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: passes --cap-add'
+ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
 
-# Flip the shipped `enabled = false` rather than appending a second [k3s]
-# table, which would be a duplicate-table TOML error.
-# Only the first match, which is [k3s]'s: [vscode] carries an `enabled` of its
-# own, and flipping that one too would test something this case isn't about.
-sed -i.bak '0,/^enabled = false$/s//enabled = true/' "$REPOCOPY/config.toml"
-ok 'sandbox_k3s_enabled "$REPOCOPY/config.toml"'    'launch fixture: k3s now enabled'
-run_launch
-ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: k3s on -> passes --cap-add'
-ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: k3s on -> grants ALL'
-
-# image/sandbox-k3s config parsing. The launch hook gates on `sandbox-k3s
-# enabled`, so this has to agree with sandbox_k3s_enabled in lib.sh — tomllib
-# yields a Python bool, which prints as "True" unless it's normalised.
-K3SH="$DIR/../image/sandbox-k3s"
-printf '[k3s]\nenabled = true\n' > "$K3S"
-ok 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: enabled = true -> 0'
-printf '[k3s]\nenabled = false\n' > "$K3S"
-no 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: enabled = false -> 1'
-printf '[apt]\npackages = []\n' > "$K3S"
-no 'SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' 'sandbox-k3s: no section -> 1'
-no 'SANDBOX_K3S_CONFIG="$TMP/nope.toml" bash "$K3SH" enabled' 'sandbox-k3s: missing file -> 1'
-
-# lib.sh and sandbox-k3s must agree, since one gates the caps and the other the
-# cluster startup; disagreement means a privileged sandbox with no cluster.
-printf '[k3s]\nenabled = true\n' > "$K3S"
-ok 'sandbox_k3s_enabled "$K3S" && SANDBOX_K3S_CONFIG="$K3S" bash "$K3SH" enabled' \
-   'sandbox-k3s and lib.sh agree when enabled'
-
-# image/sandbox-code config parsing. The launch hook gates the tunnel on
-# `sandbox-code enabled`, and the Dockerfile gates the CLI download on the same
-# setting, so a wrong answer here means either a tunnel with no CLI or a CLI
-# nobody starts.
+# image/sandbox-code, driven against a stubbed CLI.
 CODEH="$DIR/../image/sandbox-code"
-VSC="$TMP/vscode.toml"
-printf '[vscode]\nenabled = true\n' > "$VSC"
-ok 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: enabled = true -> 0'
-printf '[vscode]\nenabled = false\n' > "$VSC"
-no 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: enabled = false -> 1'
-printf '[apt]\npackages = []\n' > "$VSC"
-no 'SANDBOX_VSCODE_CONFIG="$VSC" bash "$CODEH" enabled' 'sandbox-code: no section -> 1'
-no 'SANDBOX_VSCODE_CONFIG="$TMP/nope.toml" bash "$CODEH" enabled' 'sandbox-code: missing file -> 1'
 
-# Every other subcommand needs the CLI, which is only in the image when the
-# setting was on at build time. Without it they must say so rather than fail
-# obscurely, since the fix is a config edit and a relaunch.
-printf '[vscode]\nenabled = true\n' > "$VSC"
-
-# run_code <subcommand> <signed-in?>: run sandbox-code against a stubbed CLI,
-# or against a path where no CLI exists when <signed-in?> is "nocli". Output
-# lands in $TMP/vsc.out.
+# run_code <subcommand> <signed-in?>: run sandbox-code against a stubbed CLI.
+# Output lands in $TMP/vsc.out.
 run_code() {
     local cli="$TMP/code-stub"
-    if [ "$2" = nocli ]; then
-        cli="$TMP/no-such-cli"
-    else
-        # `tunnel user show` exits non-zero when signed out; `tunnel status`
-        # reports a null tunnel when none is running (both as the real CLI does).
-        cat > "$cli" <<STUBEOF
+    # `tunnel user show` exits non-zero when signed out; `tunnel status`
+    # reports a null tunnel when none is running (both as the real CLI does).
+    cat > "$cli" <<STUBEOF
 #!/usr/bin/env bash
 case "\$*" in
     "tunnel user show") [ "$2" = yes ] && echo 'account' || { echo 'not logged in'; exit 1; } ;;
@@ -261,18 +200,13 @@ case "\$*" in
     *) echo "\$*" >> "$TMP/code-stub.log" ;;
 esac
 STUBEOF
-        chmod +x "$cli"
-    fi
-    SANDBOX_VSCODE_CONFIG="$VSC" SANDBOX_VSCODE_CLI="$cli" HOME="$TMP" \
+    chmod +x "$cli"
+    SANDBOX_VSCODE_CLI="$cli" HOME="$TMP" \
         bash "$CODEH" "$1" >"$TMP/vsc.out" 2>&1
 }
 
-no 'run_code up nocli'                                  'sandbox-code: up without the CLI -> fails'
-ok 'grep -q "VS Code CLI isn.t in this image" "$TMP/vsc.out"' \
-                                                        'sandbox-code: up without the CLI says why'
-
-# The launch hook runs `up` on every launch of an enabled sandbox, including
-# ones that were never signed in. It has to fail with the fix in hand.
+# The launch hook runs `up` on every launch, including sandboxes that were never
+# signed in. It has to fail with the fix in hand.
 rm -f "$TMP/code-stub.log"
 no 'run_code up no'                                     'sandbox-code: up signed out -> fails'
 ok 'grep -q "sandbox-code login" "$TMP/vsc.out"'        'sandbox-code: up signed out names the login command'
@@ -312,9 +246,7 @@ casks = ["tflint"]
 [post_install]
 commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
 [k3s]
-enabled = true
-[vscode]
-enabled = true
+disk = "8G"
 TOML
 ok 'gen_man'                                            'sandbox-manpage: writes a page'
 ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
@@ -323,8 +255,8 @@ ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists 
 ok 'grep -q "gh, jq" "$MOUT"'                           'sandbox-manpage: lists the formulae'
 ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists the casks'
 ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
-ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s when enabled'
-ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code when enabled'
+ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
+ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
 
 # The base toolchain comes from the same build argument that installs it, so
 # the page and the image cannot disagree about it.
@@ -340,10 +272,8 @@ no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escape
 printf '[apt]\npackages = []\n' > "$MCFG"
 ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing configured'
 ok '[ "$(grep -c "None configured." "$MOUT")" -ge 4 ]'  'sandbox-manpage: says so where a list is empty'
-no 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: omits sandbox-k3s when disabled'
-no 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: omits sandbox-code when disabled'
-ok 'grep -qF "Set enabled under [k3s]" "$MOUT"'         'sandbox-manpage: says how to enable k3s'
-ok 'grep -qF "Set enabled under [vscode]" "$MOUT"'      'sandbox-manpage: says how to enable the tunnel'
+ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
+ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 
 # image/sandbox-nice.sh. Sourced by every shell Claude spawns a command in, so
 # what it does to that shell is what every command inherits. The assertions read

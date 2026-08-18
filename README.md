@@ -56,17 +56,15 @@ Claude spawns each command in its own shell, and that shell sets all three on
 itself before the command starts. Every process under it inherits them. A shell
 you type in keeps its own standing, and so do claude and zellij.
 
-The OOM setting goes to the maximum rather than something milder because a
-sandbox without k3s holds no `CAP_SYS_RESOURCE`: a process cannot lower its OOM
-score back below where it started, so claude cannot be made harder to kill, only
-its commands easier. (A k3s sandbox runs with `--cap-add ALL` and could do it
-the other way around; the setting is the same for both.) `ionice` has an effect
-only under an I/O scheduler that implements priority, which is unverified for
-the Apple Container guest kernel; the CPU and memory parts do not depend on it.
+The OOM setting goes to the maximum rather than something milder because it
+works from the command's side: each command volunteers itself, so nothing has to
+raise claude's own standing. `ionice` has an effect only under an I/O scheduler
+that implements priority, which is unverified for the Apple Container guest
+kernel; the CPU and memory parts do not depend on it.
 
 Run anything else the same way with `sandbox-background <command>`.
 
-A configured k3s cluster starts through that wrapper, so k3s and what it runs
+The k3s cluster starts through that wrapper, so k3s and what it runs
 are niced and in the idle I/O class as well. Its OOM score is set rather than
 inherited, because kubelet gives itself one — `deprioritize_server` in
 `image/sandbox-k3s` covers the details. Each pod container keeps the score
@@ -105,12 +103,8 @@ memory = "4G"                         # container memory (K/M/G/T/P); omit for t
 cpus   = 4                            # container CPU count; omit for the platform default
 
 [k3s]
-enabled = false                       # a single-node Kubernetes cluster, started on launch
 disk    = "8G"                        # sparse ext4 image holding cluster state
 node_ip = "10.99.0.1"                 # fixed node address; must not collide with your LAN
-
-[vscode]
-enabled = false                       # a VS Code Remote Tunnel, started on launch
 ```
 
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
@@ -124,15 +118,14 @@ enabled = false                       # a VS Code Remote Tunnel, started on laun
   Omit a value to use Apple Container's default (~1 GiB memory). Changing these
   rebuilds the image on next launch, so the new limits take effect on a fresh
   container.
-- `[k3s]` runs a single-node Kubernetes cluster in every sandbox — see
-  [Kubernetes](#kubernetes-k3s) below. Off by default.
-- `[vscode]` lets you open a sandbox in VS Code — see
-  [VS Code](#vs-code-remote-tunnels) below. Off by default.
+- `[k3s]` sizes and addresses the cluster every sandbox runs — see
+  [Kubernetes](#kubernetes-k3s) below. Kubernetes and the VS Code CLI are always
+  installed; there is nothing to turn on.
 
 ## Kubernetes (k3s)
 
-Set `enabled = true` under `[k3s]` and each sandbox gets its own single-node
-cluster, started in the background as the sandbox launches. `kubectl`, `helm`,
+Each sandbox gets its own single-node cluster, started in the background as the
+sandbox launches. `kubectl`, `helm`,
 `k9s` and friends come from `[brew].formulae`, and the cluster shows up in your
 kubeconfig as a `k3s` context once it's ready.
 
@@ -171,8 +164,8 @@ To start over, `sandbox-k3s down` and delete the image file.
 
 A few consequences worth knowing:
 
-- **The setting is global.** `config.toml` is shared, so enabling k3s applies to
-  *every* sandbox — each with its own cluster, disk, and startup cost.
+- **Every sandbox runs one** — each with its own cluster, disk, and startup
+  cost.
 - **Needs `[resources].memory` of at least 4G.** Apple Container's ~1 GiB
   default is not enough for the control plane.
 - **k3s is unpinned**, tracking the stable channel like `[brew]` formulae do, so
@@ -184,8 +177,8 @@ A few consequences worth knowing:
 
 ## VS Code (Remote Tunnels)
 
-Set `enabled = true` under `[vscode]` and each sandbox gets the VS Code CLI plus
-`sandbox-code`, which runs the sandbox as a
+Each sandbox gets the VS Code CLI plus `sandbox-code`, which runs the sandbox as
+a
 [Remote Tunnel](https://code.visualstudio.com/docs/remote/tunnels). The tunnel
 dials out to the VS Code tunnel service, so nothing listens inside the sandbox
 and no port is published on your Mac.
@@ -208,15 +201,14 @@ the `sandbox-code login` line at launch and carries on to a shell.
 
 A few consequences worth knowing:
 
-- **The setting is global**, like `[k3s]` — enabling it puts the CLI in every
-  sandbox and starts a tunnel in each one you have signed in.
+- **The CLI is in every sandbox**, and a tunnel starts in each one you have
+  signed in.
 - **The tunnel is named after the sandbox**, lowercased, with anything outside
   letters, digits and hyphens replaced by a hyphen. Whatever the tunnel service
   makes of a name lands in `~/.sandbox-code.log`, which `sandbox-code status`
   tails when the tunnel isn't up.
 - **An account holds ten tunnels.** Registering an eleventh deletes an unused
-  one at random, and since the setting is global, every sandbox you sign in
-  registers one of the ten.
+  one at random, and every sandbox you sign in registers one of the ten.
 - **The CLI is unpinned**, tracking the stable channel like k3s and the `[brew]`
   formulae, so two rebuilds can install different versions.
 - **A running tunnel is remote access to the sandbox** — see "Security scope"
@@ -265,16 +257,15 @@ and does not protect:
   Container (a lightweight Linux VM), separating sandboxes from each other and
   from macOS — but a sandbox still runs your code with full network and your
   mounted home. It is not a jail for untrusted code.
-- **`[k3s].enabled` drops the capability limits.** By default a sandbox gets
-  Apple Container's standard capability set, which withholds `CAP_SYS_ADMIN` and
-  `CAP_NET_ADMIN`. k3s needs both (mounts, cgroup delegation, iptables, network
-  namespaces), so an enabled sandbox runs with `--cap-add ALL` and its startup
-  remounts `/proc/sys` read-write and rewrites cgroup delegation. Since the
-  setting is global, this applies to *every* sandbox. Code in a k3s sandbox is
-  effectively root over that VM — still contained by the VM boundary, but with
-  none of the in-guest restraint a default sandbox has.
+- **Every sandbox runs without capability limits.** Apple Container's standard
+  capability set withholds `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. k3s needs both
+  (mounts, cgroup delegation, iptables, network namespaces), so every sandbox
+  runs with `--cap-add ALL`, and its startup remounts `/proc/sys` read-write and
+  rewrites cgroup delegation. Code in a sandbox is effectively root over that VM
+  — still contained by the VM boundary, but with none of the in-guest restraint
+  a capability-limited container has.
 
-- **`[vscode].enabled` adds a way in from outside the machine.** A running
+- **A tunnel is a way in from outside the machine.** A running
   tunnel means anyone signed in to that GitHub or Microsoft account can open the
   sandbox — its files and a terminal in it — from any machine, and the
   connection is relayed by a third-party service rather than staying on your

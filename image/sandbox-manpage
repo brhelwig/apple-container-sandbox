@@ -40,8 +40,6 @@ def main():
     formulae = brew.get("formulae", [])
     casks = brew.get("casks", [])
     commands = config.get("post_install", {}).get("commands", [])
-    k3s = bool(config.get("k3s", {}).get("enabled"))
-    vscode = bool(config.get("vscode", {}).get("enabled"))
 
     out = []
     add = out.append
@@ -128,20 +126,18 @@ def main():
         "first in line for the OOM killer. Everything the command starts "
         "inherits all three."
     )
-    if k3s:
-        add(".TP")
-        add("sandbox\\-k3s up | down | status")
-        add(
-            "The single\\-node Kubernetes cluster, which starts at launch. Its log "
-            "is /var/log/k3s.log."
-        )
-    if vscode:
-        add(".TP")
-        add("sandbox\\-code login | up | down | status")
-        add(
-            "The VS Code Remote Tunnel, which starts at launch once you have "
-            "signed in. Its log is ~/.sandbox\\-code.log."
-        )
+    add(".TP")
+    add("sandbox\\-k3s up | down | status")
+    add(
+        "The single\\-node Kubernetes cluster, which starts at launch. Its log "
+        "is /var/log/k3s.log."
+    )
+    add(".TP")
+    add("sandbox\\-code login | up | down | status")
+    add(
+        "The VS Code Remote Tunnel, which starts at launch once you have "
+        "signed in. Its log is ~/.sandbox\\-code.log."
+    )
 
     add(".SH COMMANDS RUN BY CLAUDE")
     add(
@@ -153,35 +149,30 @@ def main():
         "and so are claude and zellij, which is the point: a command that goes "
         "wrong loses one command rather than the session."
     )
-    if k3s:
-        add(".PP")
-        add(
-            "The cluster starts the same way, so k3s and what it runs are niced "
-            "and in the idle I/O class too. Its OOM score is set rather than "
-            "inherited, since kubelet assigns its own. Each container keeps the "
-            "score kubelet computes for it from its quality of service class."
-        )
+    add(".PP")
+    add(
+        "The cluster starts the same way, so k3s and what it runs are niced "
+        "and in the idle I/O class too. Its OOM score is set rather than "
+        "inherited, since kubelet assigns its own. Each container keeps the "
+        "score kubelet computes for it from its quality of service class."
+    )
 
-    add(".SH OPTIONAL FEATURES")
+    add(".SH KUBERNETES AND VS CODE")
+    add("Every sandbox has both.")
     add(".TP")
     add("Kubernetes (k3s)")
-    if k3s:
-        add(
-            "Enabled. This sandbox runs its own single\\-node cluster, and its "
-            "state lives on ~/.sandbox\\-k3s.img. The sandbox also runs with the "
-            "full capability set, which k3s needs."
-        )
-    else:
-        add("Disabled. Set enabled under [k3s] in config.toml to turn it on.")
+    add(
+        "This sandbox runs its own single\\-node cluster, and its state lives on "
+        "~/.sandbox\\-k3s.img. The sandbox also runs with the full capability "
+        "set, which k3s needs."
+    )
     add(".TP")
     add("VS Code")
-    if vscode:
-        add(
-            "Enabled. The VS Code CLI is installed, and sandbox\\-code runs this "
-            "sandbox as a Remote Tunnel you can open from VS Code anywhere."
-        )
-    else:
-        add("Disabled. Set enabled under [vscode] in config.toml to turn it on.")
+    add(
+        "The VS Code CLI is installed, and sandbox\\-code runs this sandbox as a "
+        "Remote Tunnel you can open from VS Code anywhere. Sign in once with "
+        "sandbox\\-code login."
+    )
 
     add(".SH CHANGING WHAT IS INSTALLED")
     add(
