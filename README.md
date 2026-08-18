@@ -20,10 +20,15 @@ skips the menu and doesn't need `gum` at all.
 ## Usage
 
 ```sh
-sandbox              # menu: launch a sandbox, or create/rename/delete
+sandbox              # menu: launch a sandbox, or create/rename/delete a container
 sandbox myproject    # launch "myproject" (offers to create it if new)
 sandbox --help
 ```
+
+Deleting removes the container and nothing else. The home dir at
+`~/Sandboxes/<name>` keeps every file in it, so the sandbox stays in the menu
+and the next launch recreates the container. Delete a home dir yourself when you
+want the files gone.
 
 Homes live at `~/Sandboxes/<name>` and are mounted as the container's entire
 home, so auth, config, and shell history persist across image rebuilds and stay
