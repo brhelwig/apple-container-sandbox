@@ -71,12 +71,11 @@ remove_container() {
 
 delete_sandbox() {
     local name
-    name="$(list_sandboxes | gum choose --header 'Delete which sandbox?')" || return 0
+    name="$(list_sandboxes | gum choose --header "Delete which sandbox's container?")" || return 0
     [ -n "$name" ] || return 0
-    gum confirm "Delete '$name' and its home dir ($(sandbox_home_path "$name"))? Cannot be undone." || return 0
+    gum confirm "Delete the '$name' container? Its home dir ($(sandbox_home_path "$name")) is kept." || return 0
     remove_container "$name"
-    rm -rf "$(sandbox_home_path "$name")"
-    echo "Deleted sandbox '$name'."
+    echo "Deleted the '$name' container. Launch '$name' again to recreate it."
 }
 
 rename_sandbox() {
@@ -108,7 +107,7 @@ main() {
     ensure_gum || return 1
 
     local names choice
-    local NEW="＋ New sandbox" REN="✎ Rename…" DEL="🗑 Delete…"
+    local NEW="＋ New sandbox" REN="✎ Rename…" DEL="🗑 Delete container…"
     names="$(list_sandboxes)"
     choice="$(printf '%s\n' "$names" "$NEW" "$REN" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
 

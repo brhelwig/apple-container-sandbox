@@ -45,6 +45,10 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   kubelet computes from its quality of service class.
 
 ### Changed
+- Deleting a sandbox from the menu removes the container only. The home dir and
+  everything in it is kept, so the sandbox stays in the menu and relaunching
+  recreates the container. It used to delete the home dir as well, which failed
+  partway on files the container had written as root.
 - Every sandbox runs with `--cap-add ALL`, because k3s requires
   `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, which the default capability set omits —
   see "Security scope" in the README.

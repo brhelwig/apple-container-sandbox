@@ -183,6 +183,41 @@ ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container r
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: passes --cap-add'
 ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
 
+DSTUB="$TMP/dstub"
+mkdir -p "$DSTUB"
+cat > "$DSTUB/container" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$DELETE_LOG"
+exit 0
+STUBEOF
+cat > "$DSTUB/gum" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"Sandbox:"*)                  cat > /dev/null; echo "🗑 Delete container…" ;;
+    *"which sandbox's container"*) cat > /dev/null; echo "$DELETE_NAME" ;;
+    confirm*)                      exit "$GUM_CONFIRM" ;;
+esac
+STUBEOF
+chmod +x "$DSTUB/container" "$DSTUB/gum"
+
+DHOME="$SANDBOX_HOMES/deleteme"
+mkdir -p "$DHOME"
+echo 'work' > "$DHOME/keepme"
+
+run_delete() {
+    rm -f "$TMP/delete.log"
+    DELETE_LOG="$TMP/delete.log" DELETE_NAME=deleteme GUM_CONFIRM="$1" \
+        PATH="$DSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" >/dev/null 2>&1
+}
+
+run_delete 0
+ok 'grep -q "delete --force deleteme" "$TMP/delete.log"' 'delete: deletes the container'
+ok '[ -f "$DHOME/keepme" ]'                              'delete: keeps what is in the home dir'
+ok '[ -d "$DHOME" ]'                                     'delete: keeps the home dir'
+
+run_delete 1
+ok '[ ! -e "$TMP/delete.log" ]'                          'delete: declined -> touches nothing'
+
 # image/sandbox-code, driven against a stubbed CLI.
 CODEH="$DIR/../image/sandbox-code"
 
