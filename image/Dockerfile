@@ -7,34 +7,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-# Base toolchain (python3 parses config.toml; man-db reads sandbox(7), and
-# debian:bookworm ships no man binary at all). A build arg because the man page
-# step below lists the same packages.
 ARG BASE_PACKAGES="build-essential ca-certificates curl file git git-lfs gnupg locales man-db procps python3 sudo unzip zsh"
 RUN apt-get update && apt-get install -y --no-install-recommends $BASE_PACKAGES \
     && git lfs install --system \
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-# config.toml -> apt packages (root).
 COPY config.toml /tmp/config.toml
 RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
     && if [ -n "$pkgs" ]; then apt-get update \
        && apt-get install -y --no-install-recommends $pkgs \
        && rm -rf /var/lib/apt/lists/*; fi
 
-# podman: rootful shim + registry config (the binary comes from the apt step).
 RUN mkdir -p /etc/containers/registries.conf.d \
     && printf 'unqualified-search-registries = ["docker.io"]\n' \
         > /etc/containers/registries.conf.d/00-unqualified-docker.conf \
     && printf '#!/bin/sh\nexec sudo /usr/bin/podman "$@"\n' > /usr/local/bin/podman \
     && chmod +x /usr/local/bin/podman
 
-# k3s: runtime deps plus the latest stable binary, which is deliberately
-# unpinned to match how [brew] formulae track latest. The kernel needs nothing:
-# veth, bridge/br_netfilter, vxlan, netfilter/NAT and overlayfs are all built in
-# (CONFIG_MODULES=n, so k3s's modprobe warnings at startup are expected and
-# harmless).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
            conntrack ethtool iproute2 socat \
@@ -52,10 +42,6 @@ RUN apt-get update \
     && chmod +x /usr/local/bin/k3s \
     && /usr/local/bin/k3s --version
 
-# The VS Code CLI, which `sandbox-code` runs as a tunnel. The download is the
-# alpine asset because there is no cli-linux-* build; it is statically linked, so
-# it runs on Debian. Unpinned, like the k3s binary. The download endpoint is
-# unreliable, so the fetch retries.
 RUN case "$(dpkg --print-architecture)" in \
       arm64) asset=cli-alpine-arm64 ;; \
       amd64) asset=cli-alpine-x64 ;; \
@@ -67,7 +53,6 @@ RUN case "$(dpkg --print-architecture)" in \
     && rm -f /tmp/vscode-cli.tar.gz \
     && /usr/local/bin/code --version
 
-# Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
 RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \
     && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
     && chmod 0440 /etc/sudoers.d/$USERNAME \
@@ -77,23 +62,15 @@ USER $USERNAME
 ENV HOME=/home/$USERNAME SHELL=/usr/bin/zsh
 WORKDIR $HOME
 
-# Homebrew under /home/linuxbrew (survives the runtime $HOME bind mount).
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
-# config.toml -> brew taps. Trust each tap so its casks can install; trust is
-# irrelevant for formula-only taps, so a failure there is ignored (untrusted
-# casks still fail at install time, so this doesn't weaken safety).
 RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
     && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
 
-# config.toml -> brew formulae.
 RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("formulae",[])))')" \
     && if [ -n "$formulae" ]; then brew install $formulae; fi
 
-# config.toml -> brew casks. Cask linking can emit a benign trailing "Broken
-# pipe" (non-zero exit) in a non-TTY build even though the cask installed;
-# tolerate that when the cask actually linked / is listed.
 RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("casks",[])))')" \
     && for c in $casks; do \
          out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
@@ -106,11 +83,9 @@ RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/c
          fi; \
        done
 
-# config.toml -> post_install commands (fail the build on any error).
 RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
     && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
 
-# Shell seed into /etc/skel (root); entrypoint copies it into a fresh home.
 USER root
 RUN HOME=/etc/skel RUNZSH=no CHSH=no \
         sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
@@ -118,8 +93,6 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
     && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
-# Entry points + sandbox helpers. config.toml lands at a stable path so the
-# runtime helpers can read their settings from it.
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
@@ -137,10 +110,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-code /usr/local/bin/sandbox-welcome \
         /usr/local/bin/sandbox-background /usr/local/bin/sandbox-kubeconfig
 
-# The sandbox(7) man page, written from the same config.toml that installed the
-# tools, so `man sandbox` lists what is in this image. The welcome hook goes in
-# /etc/zsh/zshrc rather than the seeded ~/.zshrc, so it reaches a sandbox whose
-# home predates it. mandb builds the index man searches.
 COPY image/sandbox-manpage /tmp/sandbox-manpage
 RUN install -d /usr/local/share/man/man7 \
     && python3 /tmp/sandbox-manpage /tmp/config.toml "$BASE_PACKAGES" \
@@ -151,18 +120,12 @@ RUN install -d /usr/local/share/man/man7 \
     && printf '\n[ -x /usr/local/bin/sandbox-welcome ] && /usr/local/bin/sandbox-welcome\n' \
          >> /etc/zsh/zshrc
 
-# Claude's commands run as background work. The hook is in /etc/zsh/zshenv
-# rather than zshrc because the shell Claude spawns each command in is
-# non-interactive, and zshrc is for interactive shells only.
 RUN printf '\n[ -r /etc/sandbox-nice.sh ] && . /etc/sandbox-nice.sh\n' >> /etc/zsh/zshenv
 
-# The kubeconfig shim dir; see image/sandbox-kubeconfig for why it cannot sit
-# in the bind-mounted home.
 RUN install -d -o $USERNAME -g $USERNAME /var/lib/sandbox /var/lib/sandbox/kube
 ENV KUBECONFIG=/var/lib/sandbox/kube/config:/var/lib/sandbox/kube/k3s.yaml
 
 USER $USERNAME
 WORKDIR $HOME
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# Attach to (or create) a zellij session named after the sandbox.
 CMD ["/usr/local/bin/sandbox-zellij"]

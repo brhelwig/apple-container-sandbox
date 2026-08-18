@@ -18,7 +18,6 @@ EOF
 CODE="${SANDBOX_VSCODE_CLI:-/usr/local/bin/code}"
 LOG="$HOME/.sandbox-code.log"
 
-# The tunnel service accepts only lowercase letters, digits and hyphens.
 tunnel_name() {
     local name
     name="$(hostname)"
@@ -28,7 +27,6 @@ tunnel_name() {
 
 signed_in() { "$CODE" tunnel user show >/dev/null 2>&1; }
 
-# The CLI owns the answer for the whole machine.
 running() {
     "$CODE" tunnel status 2>/dev/null | python3 -c '
 import json, sys

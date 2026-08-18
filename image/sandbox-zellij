@@ -1,4 +1,2 @@
 #!/usr/bin/env zsh
-# Attach to (or create) a zellij session named after the sandbox. The container
-# hostname is set to the sandbox name, so all clients converge on one session.
 exec /home/linuxbrew/.linuxbrew/bin/zellij attach --create "$(hostname)"
