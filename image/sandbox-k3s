@@ -13,21 +13,15 @@ EOF
 }
 
 CONFIG="${SANDBOX_K3S_CONFIG:-/etc/sandbox-config.toml}"
-# Not the home dir: that is virtiofs, where mknod is denied, so the overlayfs
-# whiteouts containerd's snapshotter needs to delete a file from a lower layer
-# are impossible.
 STATE_DIR=/var/lib/rancher
 LOG=/var/log/k3s.log
 BRIDGE=br-k3s
-# Anchored so it cannot match this script's own argv.
 K3S_PATTERN='^/usr/local/bin/k3s server'
 
-# shellcheck source=sandbox-config.sh
 . "${SANDBOX_CONFIG_LIB:-/etc/sandbox-config.sh}"
 
 cfg() { sandbox_config "$CONFIG" k3s "$1" "$2"; }
 
-# sudo's default env_reset would hand us root's home after the re-exec in main.
 sandbox_home() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
@@ -50,24 +44,17 @@ mount_state() {
         mkfs.ext4 -q -F "$img"
     fi
     mkdir -p "$STATE_DIR"
-    # Reuse the existing device if the disk is already attached — a previous
-    # `down` may still be releasing it — so one file never gets two loops.
     loop="$(disk_loop)"
     [ -n "$loop" ] || loop="$(losetup --find --show "$img")"
     mount "$loop" "$STATE_DIR"
 }
 
-# /proc/sys ships read-only, but k3s requires IP forwarding.
 prepare_kernel() {
     mount -o remount,rw /proc/sys 2>/dev/null || true
     sysctl -qw net.ipv4.ip_forward=1
     sysctl -qw net.ipv6.conf.all.forwarding=1 2>/dev/null || true
 }
 
-# kubelet creates /sys/fs/cgroup/kubepods and needs domain controllers there.
-# cgroup v2 forbids that while the root cgroup holds processes of its own, so
-# move them into a child first, then delegate. Without this kubelet dies with
-# "cannot enter cgroupv2 ... invalid state".
 prepare_cgroups() {
     local type procs pid
     type="$(cat /sys/fs/cgroup/cgroup.type 2>/dev/null || echo domain)"
@@ -91,10 +78,6 @@ prepare_cgroups() {
     fi
 }
 
-# The node needs a fixed address. Apple Container issues a new DHCP lease every
-# time a container is recreated, but persisted cluster state pins the node IP —
-# a changed address makes k3s refuse to start networking ("failed to find
-# interface with specified node ip").
 prepare_network() {
     ip link show "$BRIDGE" >/dev/null 2>&1 && return 0
     ip link add "$BRIDGE" type bridge
@@ -102,11 +85,6 @@ prepare_network() {
     ip link set "$BRIDGE" up
 }
 
-# Add the cluster to the sandbox kubeconfig once k3s has written its own. The
-# server writes that file some seconds after it starts, and `up` deliberately
-# returns before then, so wait for it in the background rather than holding up
-# the shell. Runs as the sandbox user, so anything it creates in the home stays
-# owned by them.
 publish_kubeconfig() {
     local user home
     user="${SUDO_USER:-$(id -un)}"
@@ -121,13 +99,6 @@ publish_kubeconfig() {
     ) >/dev/null 2>&1 &
 }
 
-# Overrule the OOM score kubelet gives itself. It sets -999 as the agent starts,
-# which would make the cluster the last thing the kernel kills instead of the
-# first — the sandbox should lose its cluster before it loses the session it is
-# being used from. Waits for that value rather than racing it, since a write
-# before kubelet's is simply lost. The containers keep the scores kubelet
-# computes for them from their quality of service class, which this does not
-# reach.
 deprioritize_server() {
     (
         local pid adj
@@ -151,7 +122,6 @@ up() {
     prepare_network
     [ -s /etc/machine-id ] || tr -d '-' < /proc/sys/kernel/random/uuid > /etc/machine-id
     publish_kubeconfig
-    # sandbox-background execs, so the argv K3S_PATTERN matches is unchanged.
     setsid nohup /usr/local/bin/sandbox-background /usr/local/bin/k3s server \
         --write-kubeconfig-mode 644 \
         --node-ip "$(cfg node_ip 10.99.0.1)" \
@@ -166,18 +136,12 @@ down() {
     pkill -f "$K3S_PATTERN" 2>/dev/null || true
     pkill -f 'containerd-shim' 2>/dev/null || true
     while running && [ "$waited" -lt 20 ]; do sleep 1; waited=$((waited + 1)); done
-    # k3s leaves many mounts under the state dir; clear them deepest-first so
-    # the loop device can be released.
-    # `|| true`: with pipefail, grep matching nothing (no cluster ever started)
-    # would otherwise abort before the state dir is unmounted.
     awk '{print $2}' /proc/mounts \
         | grep -E '^/(var/lib/(rancher|kubelet)|run/(k3s|netns))' \
         | sort -r \
         | while read -r m; do umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true; done || true
-    # Prefer a real unmount; a lazy one leaves the loop device busy.
     umount "$STATE_DIR" 2>/dev/null || umount -l "$STATE_DIR" 2>/dev/null || true
     img="$(disk_img)"
-    # Detaching can be deferred while the unmount settles, so retry briefly.
     waited=0
     while [ -n "$(disk_loop)" ] && [ "$waited" -lt 5 ]; do
         losetup -d "$(disk_loop)" 2>/dev/null || true

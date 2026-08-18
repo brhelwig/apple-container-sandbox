@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Write the sandbox(7) man page for the image being built.
-
-    sandbox-manpage <config.toml> [base packages] > sandbox.7
-
-The tool lists come from the config.toml that the build installs from, and the
-base packages are passed in from the same build argument that installs them, so
-the page lists what the build put in rather than what someone remembered to
-write down. It runs at build time; see image/Dockerfile.
-"""
-
 import sys
 import tomllib
 
@@ -16,7 +6,6 @@ REPO = "https://github.com/brhelwig/apple-container-sandbox"
 
 
 def roff(text):
-    """Quote a value that troff would otherwise read as markup."""
     text = str(text).replace("\\", "\\e").replace("-", "\\-")
     if text[:1] in (".", "'"):
         text = "\\&" + text
@@ -24,7 +13,6 @@ def roff(text):
 
 
 def joined(values):
-    """A filled paragraph of names, or a note that there are none."""
     return ", ".join(roff(v) for v in values) if values else "None configured."
 
 
