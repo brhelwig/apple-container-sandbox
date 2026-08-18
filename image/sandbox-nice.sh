@@ -3,9 +3,8 @@
 # Call from a process, never a subshell: $$ is the outer shell there, and the
 # wrong process would be the one changed.
 #
-# 1000 rather than something milder because a sandbox without k3s holds no
-# CAP_SYS_RESOURCE, so oom_score_adj cannot go back below where a process
-# started. Claude cannot be made harder to kill, only its commands easier.
+# 1000 rather than something milder because it works from the command's side:
+# each command volunteers itself, so nothing has to raise claude's own standing.
 sandbox_deprioritize() {
     renice -n 10 -p $$ > /dev/null 2>&1
     ionice -c 3 -p $$ > /dev/null 2>&1

@@ -30,46 +30,42 @@ RUN mkdir -p /etc/containers/registries.conf.d \
     && printf '#!/bin/sh\nexec sudo /usr/bin/podman "$@"\n' > /usr/local/bin/podman \
     && chmod +x /usr/local/bin/podman
 
-# config.toml -> k3s. Runtime deps plus the latest stable k3s binary, which is
-# deliberately unpinned to match how [brew] formulae track latest. The kernel
-# needs nothing: veth, bridge/br_netfilter, vxlan, netfilter/NAT and overlayfs
-# are all built in (CONFIG_MODULES=n, so k3s's modprobe warnings at startup are
-# expected and harmless).
-RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("k3s",{}).get("enabled") else 1)'; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends \
-               conntrack ethtool iproute2 socat \
-        && rm -rf /var/lib/apt/lists/* \
-        && case "$(dpkg --print-architecture)" in \
-             arm64) asset=k3s-arm64 ;; \
-             amd64) asset=k3s ;; \
-             *) echo "unsupported arch for k3s: $(dpkg --print-architecture)" >&2; exit 1 ;; \
-           esac \
-        && tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-                  https://update.k3s.io/v1-release/channels/stable | sed 's|.*/||')" \
-        && echo "installing k3s $tag ($asset)" \
-        && curl -fsSL -o /usr/local/bin/k3s \
-             "https://github.com/k3s-io/k3s/releases/download/$(printf '%s' "$tag" | sed 's/+/%2B/')/$asset" \
-        && chmod +x /usr/local/bin/k3s \
-        && /usr/local/bin/k3s --version; \
-    fi
+# k3s: runtime deps plus the latest stable binary, which is deliberately
+# unpinned to match how [brew] formulae track latest. The kernel needs nothing:
+# veth, bridge/br_netfilter, vxlan, netfilter/NAT and overlayfs are all built in
+# (CONFIG_MODULES=n, so k3s's modprobe warnings at startup are expected and
+# harmless).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+           conntrack ethtool iproute2 socat \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "$(dpkg --print-architecture)" in \
+         arm64) asset=k3s-arm64 ;; \
+         amd64) asset=k3s ;; \
+         *) echo "unsupported arch for k3s: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+       esac \
+    && tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+              https://update.k3s.io/v1-release/channels/stable | sed 's|.*/||')" \
+    && echo "installing k3s $tag ($asset)" \
+    && curl -fsSL -o /usr/local/bin/k3s \
+         "https://github.com/k3s-io/k3s/releases/download/$(printf '%s' "$tag" | sed 's/+/%2B/')/$asset" \
+    && chmod +x /usr/local/bin/k3s \
+    && /usr/local/bin/k3s --version
 
-# config.toml -> the VS Code CLI, which `sandbox-code` runs as a tunnel. The
-# download is the alpine asset because there is no cli-linux-* build; it is
-# statically linked, so it runs on Debian. Unpinned, like the k3s binary. The
-# download endpoint is unreliable, so the fetch retries.
-RUN if python3 -c 'import tomllib,sys; sys.exit(0 if tomllib.load(open("/tmp/config.toml","rb")).get("vscode",{}).get("enabled") else 1)'; then \
-        case "$(dpkg --print-architecture)" in \
-          arm64) asset=cli-alpine-arm64 ;; \
-          amd64) asset=cli-alpine-x64 ;; \
-          *) echo "unsupported arch for the VS Code CLI: $(dpkg --print-architecture)" >&2; exit 1 ;; \
-        esac \
-        && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vscode-cli.tar.gz \
-             "https://code.visualstudio.com/sha/download?build=stable&os=$asset" \
-        && tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
-        && rm -f /tmp/vscode-cli.tar.gz \
-        && /usr/local/bin/code --version; \
-    fi
+# The VS Code CLI, which `sandbox-code` runs as a tunnel. The download is the
+# alpine asset because there is no cli-linux-* build; it is statically linked, so
+# it runs on Debian. Unpinned, like the k3s binary. The download endpoint is
+# unreliable, so the fetch retries.
+RUN case "$(dpkg --print-architecture)" in \
+      arm64) asset=cli-alpine-arm64 ;; \
+      amd64) asset=cli-alpine-x64 ;; \
+      *) echo "unsupported arch for the VS Code CLI: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vscode-cli.tar.gz \
+         "https://code.visualstudio.com/sha/download?build=stable&os=$asset" \
+    && tar -xzf /tmp/vscode-cli.tar.gz -C /usr/local/bin code \
+    && rm -f /tmp/vscode-cli.tar.gz \
+    && /usr/local/bin/code --version
 
 # Non-root user (Homebrew refuses root; UID matched for bind-mount ownership).
 RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \

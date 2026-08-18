@@ -5,11 +5,11 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Added
-- `[k3s]` section in `config.toml` runs a single-node Kubernetes cluster in each
-  sandbox, started in the background at launch. Cluster state persists across
-  container recreation and image rebuilds on a sparse ext4 image in the sandbox
-  home (`disk`, default `8G`), loop-mounted at `/var/lib/rancher`. Manage it with
-  `sandbox-k3s up|down|status`. Off by default.
+- Every sandbox runs a single-node Kubernetes cluster, started in the background
+  at launch. Cluster state persists across container recreation and image
+  rebuilds on a sparse ext4 image in the sandbox home (`[k3s].disk`, default
+  `8G`), loop-mounted at `/var/lib/rancher`. Manage it with
+  `sandbox-k3s up|down|status`.
 - The cluster is published to the sandbox kubeconfig automatically, as a `k3s`
   context. An existing kubeconfig is never modified — its own contexts, and any
   added later, are left alone.
@@ -17,15 +17,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   `config` entry symlinks back to `~/.kube/config`, so `kubectl config` and
   `gcloud container clusters get-credentials` can take the lock file the sandbox
   home refuses. Writes still land in the home and persist. Set up by
-  `sandbox-kubeconfig`, whether or not k3s is enabled.
+  `sandbox-kubeconfig`.
 
-- `[vscode]` section in `config.toml` puts the VS Code CLI in each sandbox and
-  runs it as a Remote Tunnel, so a sandbox can be opened in VS Code Desktop or
-  vscode.dev from anywhere. The tunnel dials out, so nothing listens in the
-  sandbox and no port is published on the host. Manage it with
-  `sandbox-code login|up|down|status`; after one sign-in the tunnel starts at
-  launch, and the credentials persist in the sandbox home. Off by default — see
-  "Security scope" in the README for what a running tunnel exposes.
+- Every sandbox carries the VS Code CLI and runs it as a Remote Tunnel, so a
+  sandbox can be opened in VS Code Desktop or vscode.dev from anywhere. The
+  tunnel dials out, so nothing listens in the sandbox and no port is published
+  on the host. Manage it with `sandbox-code login|up|down|status`; after one
+  sign-in the tunnel starts at launch, and the credentials persist in the
+  sandbox home. See "Security scope" in the README for what a running tunnel
+  exposes.
 
 - `man sandbox` inside a sandbox describes the sandbox and lists the tools
   installed in it. The page is written during the build from the same
@@ -39,16 +39,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   applies all three to itself and they are inherited; shells you type in,
   claude, and zellij are untouched. `sandbox-background <command>` does the
   same for anything else.
-- A configured k3s cluster starts as background work too, so k3s and what it
+- The k3s cluster starts as background work too, so k3s and what it
   runs share the CPU and I/O standing. Its OOM score is set rather than
   inherited, since kubelet assigns its own; each pod container keeps the score
   kubelet computes from its quality of service class.
 
 ### Changed
-- A sandbox with `[k3s].enabled` runs with `--cap-add ALL`, because k3s requires
-  `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, which the default capability set omits.
-  The setting is global, so this affects every sandbox — see "Security scope" in
-  the README.
+- Every sandbox runs with `--cap-add ALL`, because k3s requires
+  `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`, which the default capability set omits —
+  see "Security scope" in the README.
 - The node uses a fixed `node_ip` (default `10.99.0.1`) on a private bridge
   instead of the container's DHCP address, which changes on every recreation and
   would otherwise break the persisted cluster.

@@ -21,7 +21,9 @@ EOF
 }
 
 # The home dir persists across recreation, so replacing a stale container
-# loses nothing.
+# loses nothing. Every sandbox runs fully privileged, because k3s needs
+# CAP_SYS_ADMIN (mount, cgroups) and CAP_NET_ADMIN (iptables, netns), neither of
+# which is in Apple Container's default set.
 launch() {
     local name="$1" home image running_image
     home="$(sandbox_home_path "$name")"
@@ -45,16 +47,11 @@ launch() {
     while IFS= read -r line; do resource_args+=("$line"); done \
         < <(sandbox_resource_args "$REPO/config.toml")
 
-    # A k3s sandbox needs capabilities the default set doesn't grant.
-    local -a cap_args=()
-    while IFS= read -r line; do cap_args+=("$line"); done \
-        < <(sandbox_cap_args "$REPO/config.toml")
-
     container run --rm --interactive --tty \
         --name "$name" \
         --volume "$home:/home/$USERNAME" \
         ${resource_args[@]+"${resource_args[@]}"} \
-        ${cap_args[@]+"${cap_args[@]}"} \
+        --cap-add ALL \
         "$image"
 }
 
