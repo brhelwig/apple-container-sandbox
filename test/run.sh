@@ -158,6 +158,7 @@ ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container r
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: passes --cap-add'
 ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
 ok 'grep -qx -- "--tty" "$TMP/launch.log"'          'launch: opens a TTY'
+ok 'grep -qx -- "--init" "$TMP/launch.log"'         'launch: runs an init, so orphans get reaped'
 no 'grep -qx -- "--detach" "$TMP/launch.log"'       'launch: stays in the foreground'
 
 run_launch -d testbox
@@ -166,6 +167,7 @@ ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: detaches'
 no 'grep -qx -- "--tty" "$TMP/launch.log"'          'headless: opens no TTY'
 ok 'grep -qx "/usr/local/bin/sandbox-idle" "$TMP/launch.log"' 'headless: runs sandbox-idle'
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'headless: keeps --cap-add'
+ok 'grep -qx -- "--init" "$TMP/launch.log"'         'headless: keeps --init'
 
 run_launch --headless testbox
 ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: --headless is the long form'
