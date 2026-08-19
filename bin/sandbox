@@ -38,6 +38,7 @@ run_container() {
         --volume "$home:/home/$USERNAME" \
         ${resource_args[@]+"${resource_args[@]}"} \
         --cap-add ALL \
+        --init \
         "$@"
 }
 

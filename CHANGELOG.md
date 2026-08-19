@@ -72,6 +72,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   parsed the same way wherever it is read.
 
 ### Fixed
+- A sandbox no longer fills up with zombie processes. Whatever the container
+  ran held PID 1 — the zellij session, or `sandbox-idle` in a headless sandbox
+  — and neither one waits on the processes the kernel reparents to it. Every
+  background process that outlived its parent, such as the cluster, the VS Code
+  tunnel and anything started with `sandbox-background`, left a dead entry
+  behind on exit. Nothing cleared the entries, so a long-running sandbox
+  consumed process slots until it was restarted. The launcher now passes
+  `--init`, so the container runs an init that reaps them and forwards the stop
+  signal. Relaunch a sandbox to pick this up.
 - `sandbox-k3s --help` and `sandbox-background --help` printed their last
   sentence cut off mid-word. Both now hold their help text as text rather than
   as a range of comment lines.
