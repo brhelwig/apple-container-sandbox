@@ -88,6 +88,35 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
     && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
     && chown -R $USERNAME:$USERNAME /etc/skel
 
+COPY config.toml /tmp/config.toml
+RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
+    && if [ -n "$pkgs" ]; then apt-get update \
+       && apt-get install -y --no-install-recommends $pkgs \
+       && rm -rf /var/lib/apt/lists/*; fi
+
+USER $USERNAME
+RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
+    && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
+
+RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("formulae",[])))')" \
+    && if [ -n "$formulae" ]; then brew install $formulae; fi
+
+RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("casks",[])))')" \
+    && for c in $casks; do \
+         out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
+         printf '%s\n' "$out"; \
+         [ "$rc" -eq 0 ] && continue; \
+         if brew list --cask "$c" >/dev/null 2>&1 || printf '%s' "$out" | grep -q 'Linking Binary'; then \
+           echo "note: cask $c installed (tolerating exit $rc)"; \
+         else \
+           echo "ERROR: cask $c failed to install" >&2; exit 1; \
+         fi; \
+       done
+
+RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
+    && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
+
+USER root
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij

@@ -249,24 +249,39 @@ MANGEN="$DIR/../image/sandbox-manpage"
 MCFG="$TMP/man.toml"
 MOUT="$TMP/sandbox.7"
 gen_man() { python3 "$MANGEN" "$MCFG" "$@" > "$MOUT" 2>"$TMP/man.err"; }
-TOOLS='"curl man-db zsh" "podman ripgrep" "hashicorp/tap" "gh jq" "tflint"'
+BASE='"curl man-db zsh" "podman" "terraform-linters/tap" "cloudflared gh" ""'
 
-printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
-ok "gen_man $TOOLS"                                     'sandbox-manpage: writes a page'
+cat > "$MCFG" <<'TOML'
+[apt]
+packages = ["ripgrep"]
+[brew]
+taps = ["hashicorp/tap"]
+formulae = ["jq"]
+casks = ["tflint"]
+[post_install]
+commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
+[k3s]
+disk = "8G"
+TOML
+ok "gen_man $BASE"                                      'sandbox-manpage: writes a page'
 ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
 ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
-ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: lists the apt packages'
-ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists the brew taps'
-ok 'grep -q "gh, jq" "$MOUT"'                           'sandbox-manpage: lists the formulae'
-ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists the casks'
-ok 'grep -q "config.toml does not add to them" "$MOUT"' 'sandbox-manpage: says the tool set is fixed'
+ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: merges the base and added apt packages'
+ok 'grep -q "cloudflared, gh, jq" "$MOUT"'              'sandbox-manpage: merges the base and added formulae'
+ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists an added tap'
+ok 'grep -qF "terraform\\-linters/tap" "$MOUT"'         'sandbox-manpage: lists a base tap'
+ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists an added cask'
+ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
+ok 'grep -q "config.toml" "$MOUT"'                      'sandbox-manpage: says where to add a tool'
+ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the base lists'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
 
 no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
 
-ok 'gen_man'                                            'sandbox-manpage: writes a page with no tools passed'
-ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 5 ]'          'sandbox-manpage: says so where a list is empty'
+printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing installed on top'
+ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 6 ]'          'sandbox-manpage: says so where a list is empty'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 

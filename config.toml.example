@@ -1,3 +1,14 @@
+[apt]
+packages = []
+
+[brew]
+taps = []
+formulae = []
+casks = []
+
+[post_install]
+commands = []
+
 [resources]
 memory = "4G"
 cpus = 4

@@ -119,6 +119,19 @@ Keeping it untracked means editing it never conflicts with `git pull`. Editing
 next `sandbox <name>` rebuilds the image and recreates the sandbox on it.
 
 ```toml
+[apt]
+packages = ["ripgrep"]                # Debian packages (apt-native, arm64)
+
+[brew]
+taps     = ["hashicorp/tap"]          # taps are tapped AND trusted (so tap casks install)
+formulae = ["ripgrep-all"]            # linuxbrew formulae
+casks    = ["ngrok"]                  # Homebrew casks that ship a Linux build
+
+[post_install]
+commands = [                          # shell run at build time as the sandbox user (+ sudo)
+  "gcloud components install gke-gcloud-auth-plugin --quiet",
+]
+
 [resources]
 memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
 cpus   = 4                            # container CPU count; omit for the platform default
@@ -129,10 +142,18 @@ disk      = "8G"                      # sparse ext4 image holding cluster state
 node_ip   = "10.99.0.1"               # fixed node address; must not collide with your LAN
 ```
 
-- **`config.toml` installs nothing.** Every sandbox gets the same tools — see
-  [What's in the base image](#whats-in-the-base-image) for the list and how to
-  change it. What the config decides is how big a sandbox is and whether the
-  cluster comes up on its own.
+- **These sections add to the base set, they don't replace it.** Every sandbox
+  installs the same tools no matter what is in here — `gh`, `node`, gcloud,
+  terraform, `cloudflared` and the rest, listed under
+  [What's in the base image](#whats-in-the-base-image). `config.toml` is for what
+  you want on top of that.
+- Prefer **apt** for stable, arch-native packages; **brew formulae** for current
+  dev tooling; **casks** for prebuilt binaries (they must have a Linux build).
+- A tap-provided formula/cask uses its fully-qualified name (e.g.
+  `hashicorp/tap/terraform`) once its tap is listed in `taps`.
+- `[post_install]` is for anything that isn't a package — component installs,
+  downloading a binary or AppImage, etc. It runs after all installs and **fails
+  the build** on error.
 - `[resources]` sets each sandbox's memory and CPU (passed to `container run`).
   Omit a value to use Apple Container's default (~1 GiB memory). Changing these
   rebuilds the image on next launch, so the new limits take effect on a fresh
@@ -262,16 +283,12 @@ Every sandbox runs the same image, built from `image/Dockerfile`:
 - Commands run by Claude Code treated as background work — see
   [Claude in a sandbox](#claude-in-a-sandbox).
 
-The tools themselves (`gh`, `node`, gcloud, terraform, `cloudflared`, …) are
-build arguments in the same file: `APT_PACKAGES`, `BREW_TAPS`, `BREW_FORMULAE`
-and `BREW_CASKS`. Edit a list there and the next `sandbox <name>` rebuilds the
-image with it, for every sandbox on that Mac.
-
-- Prefer **apt** for stable, arch-native packages; **brew formulae** for current
-  dev tooling; **casks** for prebuilt binaries (they must have a Linux build).
-- A tap-provided formula or cask uses its fully-qualified name (e.g.
-  `hashicorp/tap/terraform`) once its tap is in `BREW_TAPS`.
-- Taps are tapped **and** trusted, so a cask from a tap installs.
+The tools every sandbox gets (`gh`, `node`, gcloud, terraform, `cloudflared`, …)
+are build arguments in the same file: `APT_PACKAGES`, `BREW_TAPS`,
+`BREW_FORMULAE` and `BREW_CASKS`. Edit a list there and the next
+`sandbox <name>` rebuilds the image with it, for every sandbox on that Mac.
+`config.toml` adds to these lists per machine — it never takes anything out of
+them.
 
 ## Security scope
 
