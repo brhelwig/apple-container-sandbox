@@ -48,6 +48,71 @@ jobs:
       - uses: actions/checkout@v7
       - run: bash test/run.sh
 
+  runtime:
+    name: --init reaps orphans on Apple Container
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      CONTAINER_VERSION: '1.2.2'
+      PROBE_IMAGE: 'docker.io/library/alpine:3'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Apple Container
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 -o container.pkg \
+            "https://github.com/apple/container/releases/download/$CONTAINER_VERSION/container-$CONTAINER_VERSION-installer-signed.pkg"
+          sudo installer -pkg container.pkg -target /
+          container --version
+
+      - name: Start the runtime
+        run: |
+          container system start --enable-kernel-install --timeout 120
+          container run --rm "$PROBE_IMAGE" true
+          echo "the runtime can run a container on this runner"
+
+      - name: --init replaces PID 1
+        run: |
+          cmdline() {
+            container run --rm "$@" "$PROBE_IMAGE" \
+              sh -c 'tr "\0" " " < /proc/1/cmdline' | tr -d '\r'
+          }
+          plain="$(cmdline)"
+          init="$(cmdline --init)"
+          echo "PID 1 without --init: $plain"
+          echo "PID 1 with    --init: $init"
+          case "$plain" in *sh*) ;; *) echo "expected the command at PID 1 without --init" >&2; exit 1 ;; esac
+          [ "$plain" != "$init" ]
+
+      - name: Orphans are reaped under --init
+        run: |
+          cat > probe.sh <<'PROBE'
+          setsid sh -c 'sleep 1 &' </dev/null >/dev/null 2>&1
+          sleep 5
+          n=0
+          for f in /proc/[0-9]*/stat; do
+            line=$(cat "$f" 2>/dev/null) || continue
+            rest=${line#*') '}
+            state=${rest%% *}
+            rest=${rest#* }
+            ppid=${rest%% *}
+            if [ "$state" = Z ] && [ "$ppid" = 1 ]; then n=$((n + 1)); fi
+          done
+          echo "ZOMBIES=$n"
+          PROBE
+          probe="$(cat probe.sh)"
+          count() {
+            container run --rm "$@" "$PROBE_IMAGE" sh -c "$probe" \
+              | tr -d '\r' | sed -n 's/^ZOMBIES=//p' | tail -1
+          }
+          with="$(count --init)"
+          without="$(count)"
+          echo "zombies left under PID 1 -- with --init: ${with:-?}, without: ${without:-?}"
+          [ "$with" = 0 ]
+          if [ "$without" = 0 ]; then
+            echo "note: the control also reaped, so this run only shows --init does no harm" >&2
+          fi
+
   image:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
