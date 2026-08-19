@@ -70,6 +70,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   would otherwise break the persisted cluster.
 - One TOML reader serves the host CLI and both in-image helpers, so a setting is
   parsed the same way wherever it is read.
+- Every sandbox installs the same base set of tools, whatever a given Mac's
+  `config.toml` holds. The Debian packages and the Homebrew taps, formulae and
+  casks that `config.toml.example` used to ship are now the `APT_PACKAGES`,
+  `BREW_TAPS`, `BREW_FORMULAE` and `BREW_CASKS` build arguments in
+  `image/Dockerfile`, and `cloudflared` is among them. `config.toml` still adds
+  to each of those lists, and its `[post_install]` commands still run; what it
+  can no longer do is leave a sandbox without the base set. An existing
+  `config.toml` keeps working as it is — a package it names that is also in the
+  base set installs once. `man sandbox` lists the two merged.
 
 ### Fixed
 - A sandbox no longer fills up with zombie processes. Whatever the container

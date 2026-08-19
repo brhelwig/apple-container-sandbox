@@ -13,11 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends $BASE_PACKAGES 
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
     && rm -rf /var/lib/apt/lists/*
 
-COPY config.toml /tmp/config.toml
-RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
-    && if [ -n "$pkgs" ]; then apt-get update \
-       && apt-get install -y --no-install-recommends $pkgs \
-       && rm -rf /var/lib/apt/lists/*; fi
+ARG APT_PACKAGES="podman"
+RUN apt-get update && apt-get install -y --no-install-recommends $APT_PACKAGES \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/containers/registries.conf.d \
     && printf 'unqualified-search-registries = ["docker.io"]\n' \
@@ -65,6 +63,38 @@ WORKDIR $HOME
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 
+ARG BREW_TAPS="terraform-linters/tap hashicorp/tap"
+RUN for t in $BREW_TAPS; do brew tap "$t" && { brew trust "$t" || true; }; done
+
+ARG BREW_FORMULAE="ansible awscli azure-cli cloudflare-wrangler cloudflared fzf gh go gum hadolint hashicorp/tap/terraform helm helmfile htop jq k9s kubectl kubectx kustomize lazygit lazysql mosh nano node pre-commit sops sqlite uv watch yq zellij zstd"
+RUN brew install $BREW_FORMULAE
+
+ARG BREW_CASKS="claude-code@latest gcloud-cli tflint"
+RUN for c in $BREW_CASKS; do \
+      out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
+      printf '%s\n' "$out"; \
+      [ "$rc" -eq 0 ] && continue; \
+      if brew list --cask "$c" >/dev/null 2>&1 || printf '%s' "$out" | grep -q 'Linking Binary'; then \
+        echo "note: cask $c installed (tolerating exit $rc)"; \
+      else \
+        echo "ERROR: cask $c failed to install" >&2; exit 1; \
+      fi; \
+    done
+
+USER root
+RUN HOME=/etc/skel RUNZSH=no CHSH=no \
+        sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
+    && printf 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"\n' | tee -a /etc/skel/.zshrc /etc/skel/.bashrc \
+    && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
+    && chown -R $USERNAME:$USERNAME /etc/skel
+
+COPY config.toml /tmp/config.toml
+RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
+    && if [ -n "$pkgs" ]; then apt-get update \
+       && apt-get install -y --no-install-recommends $pkgs \
+       && rm -rf /var/lib/apt/lists/*; fi
+
+USER $USERNAME
 RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
     && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
 
@@ -87,12 +117,6 @@ RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config
     && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
 
 USER root
-RUN HOME=/etc/skel RUNZSH=no CHSH=no \
-        sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
-    && printf 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"\n' | tee -a /etc/skel/.zshrc /etc/skel/.bashrc \
-    && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
-    && chown -R $USERNAME:$USERNAME /etc/skel
-
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
@@ -114,7 +138,8 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
 
 COPY image/sandbox-manpage /tmp/sandbox-manpage
 RUN install -d /usr/local/share/man/man7 \
-    && python3 /tmp/sandbox-manpage /tmp/config.toml "$BASE_PACKAGES" \
+    && python3 /tmp/sandbox-manpage /etc/sandbox-config.toml \
+         "$BASE_PACKAGES" "$APT_PACKAGES" "$BREW_TAPS" "$BREW_FORMULAE" "$BREW_CASKS" \
          > /usr/local/share/man/man7/sandbox.7 \
     && rm -f /tmp/sandbox-manpage \
     && mandb -q \

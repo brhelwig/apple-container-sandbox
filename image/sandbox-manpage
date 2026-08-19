@@ -13,20 +13,28 @@ def roff(text):
 
 
 def joined(values):
-    return ", ".join(roff(v) for v in values) if values else "None configured."
+    return ", ".join(roff(v) for v in values) if values else "None."
+
+
+def argument(index):
+    return sys.argv[index].split() if len(sys.argv) > index else []
+
+
+def merged(base, added):
+    return sorted(set(base) | set(added))
 
 
 def main():
     config_path = sys.argv[1]
-    base_packages = sys.argv[2].split() if len(sys.argv) > 2 else []
+    base_packages = argument(2)
     with open(config_path, "rb") as f:
         config = tomllib.load(f)
 
-    apt = config.get("apt", {}).get("packages", [])
     brew = config.get("brew", {})
-    taps = brew.get("taps", [])
-    formulae = brew.get("formulae", [])
-    casks = brew.get("casks", [])
+    apt = merged(argument(3), config.get("apt", {}).get("packages", []))
+    taps = merged(argument(4), brew.get("taps", []))
+    formulae = merged(argument(5), brew.get("formulae", []))
+    casks = merged(argument(6), brew.get("casks", []))
     commands = config.get("post_install", {}).get("commands", [])
     k3s_autostart = bool(config.get("k3s", {}).get("autostart", False))
 
@@ -65,7 +73,11 @@ def main():
     )
 
     add(".SH INSTALLED TOOLS")
-    add("These come from config.toml, except the base toolchain, which is structural.")
+    add(
+        "Every sandbox gets the same base set from the image build. config.toml "
+        "on the Mac adds to that set. The lists below are what this image has, "
+        "from both."
+    )
 
     add(".SS Base toolchain")
     add(joined(sorted(base_packages)))
@@ -89,7 +101,7 @@ def main():
             add(roff(command))
         add(".fi")
     else:
-        add("None configured.")
+        add("None.")
 
     add(".SH HELPERS")
     add(".TP")
@@ -200,9 +212,16 @@ def main():
     add(".SH CHANGING WHAT IS INSTALLED")
     add(
         "config.toml lives on the Mac, in the apple\\-container\\-sandbox checkout, "
-        "not in the sandbox. Edit it there and run sandbox <name> again: the "
+        "not in the sandbox. Add a package to it and run sandbox <name> again: the "
         "image rebuilds, the container is recreated on it, and the home carries "
         "over. This page is written by that build."
+    )
+    add(".PP")
+    add(
+        "The base set every sandbox gets is in image/Dockerfile, next to it, as "
+        "the APT_PACKAGES, BREW_TAPS, BREW_FORMULAE and BREW_CASKS build "
+        "arguments. Change one of those and every sandbox on that Mac gets the "
+        "change."
     )
     add(".PP")
     add("The config this image was built from is at /etc/sandbox\\-config.toml.")

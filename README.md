@@ -74,7 +74,7 @@ man sandbox
 
 The page lists the tools installed in this sandbox, says where the home comes
 from and what survives a rebuild, and covers the `sandbox-*` helpers. It is
-written during the image build from the same `config.toml` that installs the
+written during the image build from the same package lists that install the
 tools, so it describes the image it ships in rather than a list someone keeps
 current by hand. Each freshly launched sandbox prints one line pointing at it.
 
@@ -120,12 +120,12 @@ next `sandbox <name>` rebuilds the image and recreates the sandbox on it.
 
 ```toml
 [apt]
-packages = ["podman", "ripgrep"]      # Debian packages (apt-native, arm64)
+packages = ["ripgrep"]                # Debian packages (apt-native, arm64)
 
 [brew]
 taps     = ["hashicorp/tap"]          # taps are tapped AND trusted (so tap casks install)
-formulae = ["gh", "node", "hashicorp/tap/terraform"]   # linuxbrew formulae
-casks    = ["claude-code@latest"]     # Homebrew casks that ship a Linux build
+formulae = ["ripgrep-all"]            # linuxbrew formulae
+casks    = ["ngrok"]                  # Homebrew casks that ship a Linux build
 
 [post_install]
 commands = [                          # shell run at build time as the sandbox user (+ sudo)
@@ -142,6 +142,11 @@ disk      = "8G"                      # sparse ext4 image holding cluster state
 node_ip   = "10.99.0.1"               # fixed node address; must not collide with your LAN
 ```
 
+- **These sections add to the base set, they don't replace it.** Every sandbox
+  installs the same tools no matter what is in here — `gh`, `node`, gcloud,
+  terraform, `cloudflared` and the rest, listed under
+  [What's in the base image](#whats-in-the-base-image). `config.toml` is for what
+  you want on top of that.
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
   dev tooling; **casks** for prebuilt binaries (they must have a Linux build).
 - A tap-provided formula/cask uses its fully-qualified name (e.g.
@@ -154,15 +159,14 @@ node_ip   = "10.99.0.1"               # fixed node address; must not collide wit
   rebuilds the image on next launch, so the new limits take effect on a fresh
   container.
 - `[k3s]` sizes and addresses the cluster, and `autostart` decides whether it
-  comes up at launch — see [Kubernetes](#kubernetes-k3s) below. Kubernetes and
-  the VS Code CLI are always installed either way.
+  comes up at launch — see [Kubernetes](#kubernetes-k3s) below.
 
 ## Kubernetes (k3s)
 
 Each sandbox can run its own single-node cluster. k3s is installed in every
 sandbox but stays stopped until you ask for it, so a sandbox you use for
 anything else costs nothing to keep. `kubectl`, `helm`, `k9s` and friends come
-from `[brew].formulae`, and the cluster shows up in your kubeconfig as a `k3s`
+from `BREW_FORMULAE`, and the cluster shows up in your kubeconfig as a `k3s`
 context once it's ready.
 
 ```sh
@@ -210,8 +214,8 @@ A few consequences worth knowing:
   which is why `autostart` is off by default.
 - **Needs `[resources].memory` of at least 4G.** Apple Container's ~1 GiB
   default is not enough for the control plane.
-- **k3s is unpinned**, tracking the stable channel like `[brew]` formulae do, so
-  two rebuilds can install different k3s versions.
+- **k3s is unpinned**, tracking the stable channel like the Homebrew formulae
+  do, so two rebuilds can install different k3s versions.
 - **The node IP is fixed** rather than the container's DHCP address, which
   changes on every recreation and would otherwise break the persisted cluster.
 - `modprobe` warnings in the k3s log are expected — the kernel is monolithic and
@@ -254,14 +258,14 @@ A few consequences worth knowing:
   tails when the tunnel isn't up.
 - **An account holds ten tunnels.** Registering an eleventh deletes an unused
   one at random, and every sandbox you sign in registers one of the ten.
-- **The CLI is unpinned**, tracking the stable channel like k3s and the `[brew]`
+- **The CLI is unpinned**, tracking the stable channel like k3s and the Homebrew
   formulae, so two rebuilds can install different versions.
 - **A running tunnel is remote access to the sandbox** — see "Security scope"
   below.
 
 ## What's in the base image
 
-Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
+Every sandbox runs the same image, built from `image/Dockerfile`:
 
 - **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
@@ -272,16 +276,19 @@ Everything not in `config.toml` is structural, baked into `image/Dockerfile`:
 - A **non-root user** (UID matched to your host for bind-mount ownership) with
   passwordless `sudo`, `zsh` + oh-my-zsh, and a `📦 <name>` prompt showing the
   sandbox name.
-- **podman** wired for rootful use via a `sudo podman` shim (the `podman`
-  package itself comes from `config.toml`).
+- **podman** wired for rootful use via a `sudo podman` shim.
 - A launcher that drops you into a zellij session named after the sandbox.
-- A `sandbox(7)` man page written from `config.toml` at build time, and a line
-  at launch pointing at it.
+- A `sandbox(7)` man page written at build time from the same package lists that
+  install the tools, and a line at launch pointing at it.
 - Commands run by Claude Code treated as background work — see
   [Claude in a sandbox](#claude-in-a-sandbox).
 
-Your actual tools (`gh`, `node`, gcloud, terraform, …) come from `config.toml`,
-not the base image.
+The tools every sandbox gets (`gh`, `node`, gcloud, terraform, `cloudflared`, …)
+are build arguments in the same file: `APT_PACKAGES`, `BREW_TAPS`,
+`BREW_FORMULAE` and `BREW_CASKS`. Edit a list there and the next
+`sandbox <name>` rebuilds the image with it, for every sandbox on that Mac.
+`config.toml` adds to these lists per machine — it never takes anything out of
+them.
 
 ## Security scope
 
@@ -329,7 +336,7 @@ bash test/run.sh
 ```
 
 Every push also runs these on GitHub Actions, alongside ShellCheck, hadolint,
-and a Docker build of `image/Dockerfile` against `config.toml.example` — the
-build that catches a tap, formula, or cask breaking. Launching a real sandbox
+and a Docker build of `image/Dockerfile` — the build that catches a tap,
+formula, or cask breaking. Launching a real sandbox
 isn't covered: Apple Container needs the Virtualization framework, which hosted
 runners can't provide.

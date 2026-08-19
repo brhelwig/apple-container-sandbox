@@ -1,16 +1,10 @@
 [apt]
-packages = ["podman"]
+packages = []
 
 [brew]
-taps = ["terraform-linters/tap", "hashicorp/tap"]
-formulae = [
-  "ansible", "awscli", "azure-cli", "cloudflare-wrangler", "cloudflared", "fzf",
-  "gh", "go", "gum", "hadolint", "hashicorp/tap/terraform", "helm", "helmfile",
-  "htop", "jq", "k9s", "kubectl", "kubectx", "kustomize", "lazygit", "lazysql",
-  "mosh", "nano", "node", "pre-commit", "sops", "sqlite", "uv", "watch", "yq",
-  "zellij", "zstd",
-]
-casks = ["claude-code@latest", "gcloud-cli", "tflint"]
+taps = []
+formulae = []
+casks = []
 
 [post_install]
 commands = []
