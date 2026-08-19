@@ -98,7 +98,7 @@ kernel; the CPU and memory parts do not depend on it.
 
 Run anything else the same way with `sandbox-background <command>`.
 
-The k3s cluster starts through that wrapper, so k3s and what it runs
+The k3s cluster runs through that wrapper, so k3s and what it runs
 are niced and in the idle I/O class as well. Its OOM score is set rather than
 inherited, because kubelet gives itself one — `deprioritize_server` in
 `image/sandbox-k3s` covers the details. Each pod container keeps the score
@@ -137,8 +137,9 @@ memory = "4G"                         # container memory (K/M/G/T/P); omit for t
 cpus   = 4                            # container CPU count; omit for the platform default
 
 [k3s]
-disk    = "8G"                        # sparse ext4 image holding cluster state
-node_ip = "10.99.0.1"                 # fixed node address; must not collide with your LAN
+autostart = false                     # start the cluster at launch; otherwise sandbox-k3s up
+disk      = "8G"                      # sparse ext4 image holding cluster state
+node_ip   = "10.99.0.1"               # fixed node address; must not collide with your LAN
 ```
 
 - Prefer **apt** for stable, arch-native packages; **brew formulae** for current
@@ -152,22 +153,28 @@ node_ip = "10.99.0.1"                 # fixed node address; must not collide wit
   Omit a value to use Apple Container's default (~1 GiB memory). Changing these
   rebuilds the image on next launch, so the new limits take effect on a fresh
   container.
-- `[k3s]` sizes and addresses the cluster every sandbox runs — see
-  [Kubernetes](#kubernetes-k3s) below. Kubernetes and the VS Code CLI are always
-  installed; there is nothing to turn on.
+- `[k3s]` sizes and addresses the cluster, and `autostart` decides whether it
+  comes up at launch — see [Kubernetes](#kubernetes-k3s) below. Kubernetes and
+  the VS Code CLI are always installed either way.
 
 ## Kubernetes (k3s)
 
-Each sandbox gets its own single-node cluster, started in the background as the
-sandbox launches. `kubectl`, `helm`,
-`k9s` and friends come from `[brew].formulae`, and the cluster shows up in your
-kubeconfig as a `k3s` context once it's ready.
+Each sandbox can run its own single-node cluster. k3s is installed in every
+sandbox but stays stopped until you ask for it, so a sandbox you use for
+anything else costs nothing to keep. `kubectl`, `helm`, `k9s` and friends come
+from `[brew].formulae`, and the cluster shows up in your kubeconfig as a `k3s`
+context once it's ready.
 
 ```sh
+sandbox-k3s up        # start the cluster
 sandbox-k3s status    # node + pod summary, or why it isn't up yet
 sandbox-k3s down      # stop the cluster (state is kept)
-sandbox-k3s up        # start it again
 ```
+
+Set `autostart = true` under `[k3s]` in `config.toml` to have every sandbox
+start the cluster at launch instead. The launch hook doesn't wait for it, so you
+still get a shell immediately, and a cluster that fails to come up costs you the
+cluster rather than the shell.
 
 ### Your kubeconfig
 
@@ -180,9 +187,9 @@ explains why. That directory's `config` entry symlinks to `~/.kube/config`, so
 your kubeconfig still lands in the home and survives the container. Run
 `sandbox-kubeconfig` to rebuild it by hand.
 
-Bring-up takes roughly 30 s and ~800 MB of RAM. The launch hook doesn't wait for
-it, so you get a shell immediately and the cluster converges behind you. If it
-fails, you still get a shell — check `/var/log/k3s.log`.
+Bring-up takes roughly 30 s and ~800 MB of RAM. `sandbox-k3s up` returns as soon
+as the server is launched and the cluster converges behind you, so watch it with
+`sandbox-k3s status` and read `/var/log/k3s.log` if it never comes up.
 
 **Cluster state persists.** It lives on a sparse ext4 image
 (`~/Sandboxes/<name>/.sandbox-k3s.img`) that is loop-mounted inside the
@@ -198,8 +205,9 @@ To start over, `sandbox-k3s down` and delete the image file.
 
 A few consequences worth knowing:
 
-- **Every sandbox runs one** — each with its own cluster, disk, and startup
-  cost.
+- **Every sandbox can run one** — each with its own cluster and disk. A sandbox
+  where the cluster never starts pays neither the memory nor the startup cost,
+  which is why `autostart` is off by default.
 - **Needs `[resources].memory` of at least 4G.** Apple Container's ~1 GiB
   default is not enough for the control plane.
 - **k3s is unpinned**, tracking the stable channel like `[brew]` formulae do, so

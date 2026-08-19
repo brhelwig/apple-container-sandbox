@@ -281,6 +281,42 @@ ok '[ "$(grep -c "None configured." "$MOUT")" -ge 4 ]'  'sandbox-manpage: says s
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 
+ok 'grep -q "does not start at launch" "$MOUT"'         'sandbox-manpage: says k3s stays stopped by default'
+printf '[k3s]\nautostart = true\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page with k3s autostart on'
+ok 'grep -q "starts at launch" "$MOUT"'                 'sandbox-manpage: says k3s starts at launch when autostart is on'
+no 'grep -q "does not start at launch" "$MOUT"'         'sandbox-manpage: drops the stopped wording when autostart is on'
+
+ENTRY="$DIR/../image/entrypoint.sh"
+EBIN="$TMP/ebin"
+ELOG="$TMP/entry.log"
+ECFG="$TMP/entry.toml"
+mkdir -p "$EBIN" "$TMP/ehome"
+for helper in sandbox-kubeconfig sandbox-k3s sandbox-code sandbox-setup; do
+    printf '#!/bin/sh\necho "%s $*" >> "$SANDBOX_TEST_LOG"\n' "$helper" > "$EBIN/$helper"
+    chmod +x "$EBIN/$helper"
+done
+run_entrypoint() {
+    : > "$ELOG"
+    HOME="$TMP/ehome" SANDBOX_BIN="$EBIN" SANDBOX_CONFIG="$ECFG" \
+        SANDBOX_TEST_LOG="$ELOG" bash "$ENTRY" true
+}
+
+printf '[k3s]\ndisk = "8G"\n' > "$ECFG"
+ok 'run_entrypoint'                        'entrypoint: runs'
+ok 'grep -q "sandbox-kubeconfig" "$ELOG"'  'entrypoint: builds the kubeconfig'
+ok 'grep -q "sandbox-code up" "$ELOG"'     'entrypoint: starts the VS Code tunnel'
+ok 'grep -q "sandbox-setup" "$ELOG"'       'entrypoint: runs the per-launch setup'
+no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: no autostart key -> k3s stays stopped'
+
+printf '[k3s]\nautostart = false\n' > "$ECFG"
+ok 'run_entrypoint'                        'entrypoint: runs with autostart off'
+no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: autostart false -> k3s stays stopped'
+
+printf '[k3s]\nautostart = true\n' > "$ECFG"
+ok 'run_entrypoint'                        'entrypoint: runs with autostart on'
+ok 'grep -q "sandbox-k3s up" "$ELOG"'      'entrypoint: autostart true -> starts k3s'
+
 NICE="$DIR/../image/sandbox-nice.sh"
 if [ -e /proc/self/oom_score_adj ]; then
     ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(nice)\" = 10 ]"' \

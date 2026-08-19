@@ -20,5 +20,6 @@ memory = "4G"
 cpus = 4
 
 [k3s]
+autostart = false
 disk = "8G"
 node_ip = "10.99.0.1"

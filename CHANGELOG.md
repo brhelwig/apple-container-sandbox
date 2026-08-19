@@ -14,15 +14,18 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   the stop signal so `container stop <name>` returns at once.
 - `sandbox` rejects an unrecognized option instead of treating it as a sandbox
   name, so a mistyped flag no longer creates a sandbox called `--headles`.
-
-- Every sandbox runs a single-node Kubernetes cluster, started in the background
-  at launch. Cluster state persists across container recreation and image
+- Every sandbox can run a single-node Kubernetes cluster. k3s is installed in
+  every sandbox but stays stopped until you run `sandbox-k3s up`, which starts
+  it in the background; `sandbox-k3s down|status` stop it and report on it. Set
+  `[k3s].autostart = true` to start it at launch instead — it is `false` by
+  default, so a sandbox you use for anything else pays neither the memory nor
+  the startup cost. Cluster state persists across container recreation and image
   rebuilds on a sparse ext4 image in the sandbox home (`[k3s].disk`, default
-  `8G`), loop-mounted at `/var/lib/rancher`. Manage it with
-  `sandbox-k3s up|down|status`.
-- The cluster is published to the sandbox kubeconfig automatically, as a `k3s`
-  context. An existing kubeconfig is never modified — its own contexts, and any
-  added later, are left alone.
+  `8G`), loop-mounted at `/var/lib/rancher`. `man sandbox` reports which way the
+  image was built.
+- Starting the cluster publishes it to the sandbox kubeconfig automatically, as
+  a `k3s` context. An existing kubeconfig is never modified — its own contexts,
+  and any added later, are left alone.
 - `KUBECONFIG` points at a shim directory on the container filesystem whose
   `config` entry symlinks back to `~/.kube/config`, so `kubectl config` and
   `gcloud container clusters get-credentials` can take the lock file the sandbox
@@ -49,7 +52,7 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   applies all three to itself and they are inherited; shells you type in,
   claude, and zellij are untouched. `sandbox-background <command>` does the
   same for anything else.
-- The k3s cluster starts as background work too, so k3s and what it
+- The k3s cluster runs as background work too, so k3s and what it
   runs share the CPU and I/O standing. Its OOM score is set rather than
   inherited, since kubelet assigns its own; each pod container keeps the score
   kubelet computes from its quality of service class.
