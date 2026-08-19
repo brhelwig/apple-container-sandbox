@@ -248,38 +248,25 @@ ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names 
 MANGEN="$DIR/../image/sandbox-manpage"
 MCFG="$TMP/man.toml"
 MOUT="$TMP/sandbox.7"
-gen_man() { python3 "$MANGEN" "$MCFG" "${1:-}" > "$MOUT" 2>"$TMP/man.err"; }
+gen_man() { python3 "$MANGEN" "$MCFG" "$@" > "$MOUT" 2>"$TMP/man.err"; }
+TOOLS='"curl man-db zsh" "podman ripgrep" "hashicorp/tap" "gh jq" "tflint"'
 
-cat > "$MCFG" <<'TOML'
-[apt]
-packages = ["podman", "ripgrep"]
-[brew]
-taps = ["hashicorp/tap"]
-formulae = ["gh", "jq"]
-casks = ["tflint"]
-[post_install]
-commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
-[k3s]
-disk = "8G"
-TOML
-ok 'gen_man'                                            'sandbox-manpage: writes a page'
+printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
+ok "gen_man $TOOLS"                                     'sandbox-manpage: writes a page'
 ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
+ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
 ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: lists the apt packages'
 ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists the brew taps'
 ok 'grep -q "gh, jq" "$MOUT"'                           'sandbox-manpage: lists the formulae'
 ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists the casks'
-ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
+ok 'grep -q "config.toml does not add to them" "$MOUT"' 'sandbox-manpage: says the tool set is fixed'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
 
-ok 'gen_man "curl man-db zsh"'                          'sandbox-manpage: accepts the base packages'
-ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
-
 no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
 
-printf '[apt]\npackages = []\n' > "$MCFG"
-ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing configured'
-ok '[ "$(grep -c "None configured." "$MOUT")" -ge 4 ]'  'sandbox-manpage: says so where a list is empty'
+ok 'gen_man'                                            'sandbox-manpage: writes a page with no tools passed'
+ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 5 ]'          'sandbox-manpage: says so where a list is empty'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 

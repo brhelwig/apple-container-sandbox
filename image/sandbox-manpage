@@ -13,21 +13,23 @@ def roff(text):
 
 
 def joined(values):
-    return ", ".join(roff(v) for v in values) if values else "None configured."
+    return ", ".join(roff(v) for v in values) if values else "None."
+
+
+def argument(index):
+    return sys.argv[index].split() if len(sys.argv) > index else []
 
 
 def main():
     config_path = sys.argv[1]
-    base_packages = sys.argv[2].split() if len(sys.argv) > 2 else []
+    base_packages = argument(2)
+    apt = argument(3)
+    taps = argument(4)
+    formulae = argument(5)
+    casks = argument(6)
     with open(config_path, "rb") as f:
         config = tomllib.load(f)
 
-    apt = config.get("apt", {}).get("packages", [])
-    brew = config.get("brew", {})
-    taps = brew.get("taps", [])
-    formulae = brew.get("formulae", [])
-    casks = brew.get("casks", [])
-    commands = config.get("post_install", {}).get("commands", [])
     k3s_autostart = bool(config.get("k3s", {}).get("autostart", False))
 
     out = []
@@ -60,12 +62,14 @@ def main():
     add(".PP")
     add(
         "Nothing else persists. A package installed by hand is gone the next time "
-        "the image is rebuilt. To keep a tool, add it to config.toml on the Mac "
-        "and relaunch. See CHANGING WHAT IS INSTALLED below."
+        "the image is rebuilt. See CHANGING WHAT IS INSTALLED below."
     )
 
     add(".SH INSTALLED TOOLS")
-    add("These come from config.toml, except the base toolchain, which is structural.")
+    add(
+        "Every sandbox has the same tools. The image build installs all of them, "
+        "and config.toml does not add to them or take any away."
+    )
 
     add(".SS Base toolchain")
     add(joined(sorted(base_packages)))
@@ -81,15 +85,6 @@ def main():
 
     add(".SS Homebrew casks")
     add(joined(casks))
-
-    add(".SS Commands run after the installs")
-    if commands:
-        add(".nf")
-        for command in commands:
-            add(roff(command))
-        add(".fi")
-    else:
-        add("None configured.")
 
     add(".SH HELPERS")
     add(".TP")
@@ -199,13 +194,18 @@ def main():
 
     add(".SH CHANGING WHAT IS INSTALLED")
     add(
-        "config.toml lives on the Mac, in the apple\\-container\\-sandbox checkout, "
-        "not in the sandbox. Edit it there and run sandbox <name> again: the "
-        "image rebuilds, the container is recreated on it, and the home carries "
-        "over. This page is written by that build."
+        "The tool set lives in image/Dockerfile, in the apple\\-container\\-sandbox "
+        "checkout on the Mac. Edit the package lists there and run sandbox <name> "
+        "again: the image rebuilds, the container is recreated on it, and the home "
+        "carries over. Every sandbox on that Mac then has the new tool. This page "
+        "is written by that build."
     )
     add(".PP")
-    add("The config this image was built from is at /etc/sandbox\\-config.toml.")
+    add(
+        "config.toml, next to it, installs nothing. It sets the memory and the CPU "
+        "count each sandbox gets, and whether the cluster starts at launch. The "
+        "config this image was built from is at /etc/sandbox\\-config.toml."
+    )
 
     add(".SH SECURITY")
     add(

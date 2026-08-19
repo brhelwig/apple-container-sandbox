@@ -70,6 +70,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   would otherwise break the persisted cluster.
 - One TOML reader serves the host CLI and both in-image helpers, so a setting is
   parsed the same way wherever it is read.
+- Every sandbox now installs the same tools. The Debian packages, the Homebrew
+  taps, formulae and casks are `APT_PACKAGES`, `BREW_TAPS`, `BREW_FORMULAE` and
+  `BREW_CASKS` in `image/Dockerfile`, and `cloudflared` is among them. Edit a
+  list there to change what every sandbox gets. `config.toml` no longer installs
+  anything: it sets the memory and CPU each sandbox gets, and whether the
+  cluster starts at launch. The `[apt]`, `[brew]` and `[post_install]` sections
+  of an existing `config.toml` are ignored, so a package you added there stops
+  being installed until you move it into `image/Dockerfile`. `man sandbox`
+  reports the tool set the image was built with, as before.
 
 ### Fixed
 - A sandbox no longer fills up with zombie processes. Whatever the container
@@ -86,6 +95,9 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   as a range of comment lines.
 
 ### Removed
+- `[post_install]` is gone. It ran shell commands at build time, which is
+  another way for one sandbox to end up with tools another one lacks. A build
+  step that isn't a package belongs in `image/Dockerfile`.
 - `sandbox-kubeconfig` no longer replaces a `~/.kube/config` that symlinks to the
   cluster's own file. Only unreleased versions ever created that symlink.
 

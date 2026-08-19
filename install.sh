@@ -8,7 +8,7 @@ mkdir -p "${SANDBOX_HOMES:-$HOME/Sandboxes}"
 
 if [ ! -f "$REPO/config.toml" ]; then
     cp "$REPO/config.toml.example" "$REPO/config.toml"
-    echo "created config.toml from config.toml.example (edit it to add packages / set resources)"
+    echo "created config.toml from config.toml.example (edit it to set resources and whether the cluster starts at launch)"
 fi
 
 echo "Add this to your shell rc (e.g. ~/.zshrc):"
