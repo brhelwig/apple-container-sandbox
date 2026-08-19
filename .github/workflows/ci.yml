@@ -110,6 +110,8 @@ jobs:
         run: |
           docker run --rm --entrypoint k3s "$IMAGE" --version
           docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-k3s'
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox \
+            | tr -s '[:space:]' ' ' | grep -q 'does not start at launch'
           docker run --rm --entrypoint bash "$IMAGE" -c \
             'sandbox-background /usr/local/bin/k3s --version | grep -q "k3s version"'
 
