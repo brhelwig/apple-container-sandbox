@@ -149,14 +149,30 @@ chmod +x "$LSTUB/container"
 
 run_launch() {
     rm -f "$TMP/launch.log"
-    LAUNCH_LOG="$TMP/launch.log" SANDBOX_HOMES="$TMP/homes" \
-        PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" testbox >/dev/null 2>&1
+    LAUNCH_LOG="$TMP/launch.log" SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
+        PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "$@" >/dev/null 2>&1
 }
 
-run_launch
+run_launch testbox
 ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container run'
 ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: passes --cap-add'
 ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
+ok 'grep -qx -- "--tty" "$TMP/launch.log"'          'launch: opens a TTY'
+no 'grep -qx -- "--detach" "$TMP/launch.log"'       'launch: stays in the foreground'
+
+run_launch -d testbox
+ok '[ -s "$TMP/launch.log" ]'                       'headless: reaches container run'
+ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: detaches'
+no 'grep -qx -- "--tty" "$TMP/launch.log"'          'headless: opens no TTY'
+ok 'grep -qx "/usr/local/bin/sandbox-idle" "$TMP/launch.log"' 'headless: runs sandbox-idle'
+ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'headless: keeps --cap-add'
+
+run_launch --headless testbox
+ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: --headless is the long form'
+
+run_launch --nope; status=$?
+ok '[ "$status" -eq 2 ]'                            'unknown option: exits 2'
+no '[ -e "$TMP/launch.log" ]'                       'unknown option: launches nothing'
 
 DSTUB="$TMP/dstub"
 mkdir -p "$DSTUB"

@@ -22,6 +22,7 @@ skips the menu and doesn't need `gum` at all.
 ```sh
 sandbox              # menu: launch a sandbox, or create/rename/delete a container
 sandbox myproject    # launch "myproject" (offers to create it if new)
+sandbox -d myproject # launch "myproject" headless — see below
 sandbox --help
 ```
 
@@ -34,6 +35,34 @@ Homes live at `~/Sandboxes/<name>` and are mounted as the container's entire
 home, so auth, config, and shell history persist across image rebuilds and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
+
+## Headless
+
+`sandbox -d <name>` launches a sandbox with no terminal attached. The container
+runs detached, the cluster and the [VS Code tunnel](#vs-code-remote-tunnels)
+start the way they always do, and the launcher waits for the tunnel, prints where
+it stands, and returns your prompt. Close the terminal and open the sandbox from
+VS Code.
+
+```sh
+sandbox -d myproject       # start it detached, then report the tunnel
+sandbox myproject          # attach a shell whenever you want one
+container stop myproject   # stop it
+```
+
+A headless launch differs from an ordinary one in two ways only:
+
+- **No zellij session.** The container runs `sandbox-idle` in its place, which
+  holds it open and exits on the stop signal. Attaching with `sandbox <name>`
+  starts the zellij session then, and leaving that shell no longer stops the
+  sandbox.
+- **The tunnel is reported instead of a shell.** The launcher polls
+  `sandbox-code status` inside the sandbox for up to 30 seconds and prints the
+  result, so a sandbox that was never signed in says so rather than coming up
+  silently with no way in. Set `SANDBOX_TUNNEL_WAIT` to change that budget.
+
+Everything else is the same: same image, same home mount, same capabilities, and
+the container is still removed when it stops.
 
 ## Finding your way around a sandbox
 
@@ -203,6 +232,9 @@ the tunnel for you. The credentials and the server VS Code downloads live in
 `~/.vscode`, which is the bind-mounted sandbox home, so both survive container
 recreation and image rebuilds. A sandbox that has never been signed in prints
 the `sandbox-code login` line at launch and carries on to a shell.
+
+To use the tunnel without keeping a terminal open, launch the sandbox
+[headless](#headless).
 
 A few consequences worth knowing:
 
