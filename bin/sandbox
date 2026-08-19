@@ -20,6 +20,10 @@ you can close the terminal and open it from VS Code. Attach a shell to one at an
 time with \`sandbox <name>\`, and stop it from the menu or with
 \`container stop <name>\`.
 
+Launching a sandbox that already runs attaches to it and leaves it running. When
+the image changed since it started, \`sandbox\` asks first, because a restart
+loses everything running inside.
+
 Homes live under \$SANDBOX_HOMES (default ~/Sandboxes). The container mounts
 only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
@@ -52,28 +56,39 @@ report_tunnel() {
     container exec "$name" /usr/local/bin/sandbox-code status || true
 }
 
+attach() {
+    local name="$1" headless="$2"
+    if [ "$headless" = 1 ]; then
+        echo "'$name' is already running. Attach a shell with: sandbox $name"
+        report_tunnel "$name"
+        return 0
+    fi
+    exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
+}
+
 launch() {
     local name="$1" headless="${2:-0}" home image running_image
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
-    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
-
     running_image="$(container ls 2>/dev/null | awk -v n="$name" '$1 == n {print $2}')"
 
     if [ -n "$running_image" ]; then
-        if [ "$running_image" = "$image" ]; then
-            if [ "$headless" = 1 ]; then
-                echo "'$name' is already running. Attach with: sandbox $name"
-                report_tunnel "$name"
-                return 0
-            fi
-            exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
+        if [ "$running_image" = "$(sandbox_image_ref "$("$REPO/bin/sandbox-src-hash")")" ]; then
+            attach "$name" "$headless"
+            return
+        fi
+        echo "'$name' is running on $running_image, and the image has changed since." >&2
+        if ! confirm "Restart '$name' on the new image? Everything running inside it is lost."; then
+            attach "$name" "$headless"
+            return
         fi
         container stop "$name" >/dev/null 2>&1 || true
     fi
 
     container delete --force "$name" >/dev/null 2>&1 || true
+
+    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
 
     if [ "$headless" = 1 ]; then
         run_container "$name" "$home" --detach "$image" \

@@ -26,6 +26,11 @@ sandbox -d myproject # launch "myproject" headless — see below
 sandbox --help
 ```
 
+Launching a sandbox that already runs attaches a shell to it and leaves it
+running, so background work inside it survives. Where the image changed since
+that sandbox started, `sandbox` says so and asks before it restarts the sandbox
+on the new image. Decline, and it attaches to what is already running.
+
 Deleting removes the container and nothing else. The home dir at
 `~/Sandboxes/<name>` keeps every file in it, so the sandbox stays in the menu
 and the next launch recreates the container. Delete a home dir yourself when you

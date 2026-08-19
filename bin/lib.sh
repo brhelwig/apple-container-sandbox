@@ -11,6 +11,10 @@ sandbox_home_path() {
     printf '%s/%s\n' "$SANDBOX_HOMES" "$1"
 }
 
+sandbox_image_ref() {
+    printf '%s\n' "${IMAGE:-sandbox:$1}"
+}
+
 sandbox_resource_args() {
     [ -r "$1" ] || return 0
     python3 - "$1" <<'PY'

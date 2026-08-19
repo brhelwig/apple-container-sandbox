@@ -72,6 +72,15 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   parsed the same way wherever it is read.
 
 ### Fixed
+- `sandbox <name>` no longer destroys a running sandbox. It rebuilt the image
+  first, then compared the result with the image the sandbox was started from.
+  Any edit under `image/` or to `config.toml` since launch made the two differ,
+  and it stopped and deleted the container without asking, which killed
+  everything running inside a headless sandbox. It now looks for a running
+  container before it builds anything, and attaches to one whatever image it
+  started from. Where the image changed since, it says so and asks before it
+  restarts the sandbox; decline and it attaches instead. Attaching no longer
+  rebuilds the image either, because nothing is launched from it.
 - A sandbox no longer fills up with zombie processes. Whatever the container
   ran held PID 1 — the zellij session, or `sandbox-idle` in a headless sandbox
   — and neither one waits on the processes the kernel reparents to it. Every
