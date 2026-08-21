@@ -5,6 +5,29 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Added
+- Every sandbox serves SSH. `openssh-server` joins the base toolchain, and
+  `sandbox-ssh up|down|status` runs it; the launch starts it, next to the VS
+  Code tunnel rather than in place of it, so both ways in work at once. The
+  launcher publishes the sandbox's port 22 on a port of the Mac that belongs to
+  that sandbox alone, handed out from `[ssh].port` upward and recorded in
+  `~/Sandboxes/<name>/.sandbox-ssh-port`, so several sandboxes serve SSH at the
+  same time and each keeps its port across launches. `sandbox --ssh-port <port>
+  <name>` names the port instead.
+- That port is open on every address of the Mac, so a tailnet or a LAN reaches
+  a sandbox over SSH, not the Mac alone. `[ssh].address` narrows it to one
+  address, and `[ssh].enabled = false` turns the server off everywhere.
+- A public key is the only way into a sandbox over SSH: the account has no
+  password, and the server refuses password logins and root logins. The launcher
+  authorizes the Mac's own public keys the first time it creates a home, and
+  never touches `~/.ssh/authorized_keys` again, so a key added by hand stays.
+  `man sandbox` walks through authorizing a key and connecting.
+- The SSH host key lives in `~/.sandbox-ssh`, in the sandbox home, so the
+  fingerprint survives container recreation and image rebuilds. The image ships
+  without a host key, so no two sandboxes share one.
+- A session opened over SSH gets the same PATH as a shell in the sandbox, from
+  `/etc/environment`, so `ssh <sandbox> kubectl get pods` finds the tools that
+  Homebrew installed. `sftp` is served too, which is what `scp`, `rsync` and
+  VS Code's Remote-SSH need.
 - `sandbox -d <name>` launches a sandbox headless: the container runs detached
   with no zellij session, so the cluster and the VS Code tunnel keep running
   after the terminal closes. The launcher waits for the tunnel, prints where it

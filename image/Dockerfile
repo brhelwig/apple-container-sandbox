@@ -7,10 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
 
-ARG BASE_PACKAGES="build-essential ca-certificates curl file git git-lfs gnupg locales man-db procps python3 sudo unzip zsh"
+ARG BASE_PACKAGES="build-essential ca-certificates curl file git git-lfs gnupg locales man-db openssh-server procps python3 sudo unzip zsh"
 RUN apt-get update && apt-get install -y --no-install-recommends $BASE_PACKAGES \
     && git lfs install --system \
     && sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && locale-gen \
+    && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 
 ARG APT_PACKAGES="podman"
@@ -123,6 +124,8 @@ COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
 COPY image/sandbox-idle /usr/local/bin/sandbox-idle
 COPY image/sandbox-k3s /usr/local/bin/sandbox-k3s
 COPY image/sandbox-code /usr/local/bin/sandbox-code
+COPY image/sandbox-ssh /usr/local/bin/sandbox-ssh
+COPY image/sandbox-sshd.conf /etc/ssh/sandbox-sshd.conf
 COPY image/sandbox-welcome /usr/local/bin/sandbox-welcome
 COPY image/sandbox-background /usr/local/bin/sandbox-background
 COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
@@ -134,7 +137,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-idle \
         /usr/local/bin/sandbox-k3s /usr/local/bin/sandbox-code \
         /usr/local/bin/sandbox-welcome /usr/local/bin/sandbox-background \
-        /usr/local/bin/sandbox-kubeconfig
+        /usr/local/bin/sandbox-kubeconfig /usr/local/bin/sandbox-ssh
+
+RUN printf 'PATH="%s"\n' "$PATH" > /etc/environment
 
 COPY image/sandbox-manpage /tmp/sandbox-manpage
 RUN install -d /usr/local/share/man/man7 \

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Run an SSH server inside a sandbox, so the sandbox can be reached from the Mac
+with ssh, and with scp, rsync, and everything else built on it.
+
+  sandbox-ssh up | down | status
+
+The server listens on port 22 inside the sandbox. The launcher publishes it on
+the Mac, on a port belonging to this sandbox alone, so several sandboxes serve
+SSH at once. That port is open on every address the Mac has, so a tailnet or a
+LAN reaches it too. Only a key in ~/.ssh/authorized_keys gets in; passwords and
+root logins are refused. The host key lives in ~/.sandbox-ssh, which is the
+bind-mounted sandbox home, so the fingerprint survives container recreation and
+image rebuilds.
+EOF
+}
+
+SSHD="${SANDBOX_SSHD:-/usr/sbin/sshd}"
+CONFIG="${SANDBOX_SSHD_CONFIG:-/etc/ssh/sandbox-sshd.conf}"
+PRIVSEP_DIR="${SANDBOX_SSHD_PRIVSEP_DIR:-/run/sshd}"
+PID_FILE="${SANDBOX_SSHD_PID_FILE:-/run/sandbox-sshd.pid}"
+STATE="$HOME/.sandbox-ssh"
+HOST_KEY="$STATE/ssh_host_ed25519_key"
+KEYS="$HOME/.ssh/authorized_keys"
+PORT_FILE="$HOME/.sandbox-ssh-port"
+LOG="$HOME/.sandbox-ssh.log"
+
+running() {
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    [ -n "$pid" ] || return 1
+    grep -qx sshd "/proc/$pid/comm" 2>/dev/null
+}
+
+authorized_keys() {
+    local count
+    count="$(grep -cE '^[[:space:]]*[^#[:space:]]' "$KEYS" 2>/dev/null || true)"
+    printf '%s\n' "${count:-0}"
+}
+
+authorized() { [ "$(authorized_keys)" -gt 0 ]; }
+
+published_port() { cat "$PORT_FILE" 2>/dev/null || true; }
+
+report_reach() {
+    local port
+    port="$(published_port)"
+    if [ -z "$port" ]; then
+        echo "no published port recorded in $PORT_FILE yet — relaunch the sandbox"
+        return 0
+    fi
+    echo "on the Mac: ssh -p $port $(id -un)@127.0.0.1"
+    echo "elsewhere: the same port on the Mac's own address, a tailnet included"
+}
+
+no_keys() {
+    echo "No authorized key, so nothing could log in." >&2
+    echo "Add a public key to $KEYS. On the Mac the same file is" >&2
+    echo "Sandboxes/$(hostname)/.ssh/authorized_keys, in your home there." >&2
+}
+
+ensure_host_key() {
+    mkdir -p "$STATE"
+    chmod 700 "$STATE"
+    [ -s "$HOST_KEY" ] && return 0
+    ssh-keygen -q -t ed25519 -N '' -C "sandbox $(hostname)" -f "$HOST_KEY"
+}
+
+up() {
+    if running; then echo "the SSH server is already running"; return 0; fi
+    if ! authorized; then
+        no_keys
+        return 1
+    fi
+    ensure_host_key
+    : >> "$LOG"
+    sudo mkdir -p "$PRIVSEP_DIR"
+    sudo chmod 0755 "$PRIVSEP_DIR"
+    sudo "$SSHD" -f "$CONFIG" -h "$HOST_KEY" -o "PidFile=$PID_FILE" -E "$LOG"
+    echo "ssh: listening on port 22 in the sandbox"
+    report_reach
+}
+
+down() {
+    if ! running; then echo "the SSH server is not running"; return 0; fi
+    sudo kill "$(cat "$PID_FILE")"
+    sudo rm -f "$PID_FILE"
+    echo "SSH server stopped; the host key and the authorized keys are kept"
+}
+
+status() {
+    if ! running; then
+        echo "ssh: not running"
+        authorized || no_keys
+        [ -s "$LOG" ] && tail -n 5 "$LOG" | sed 's/^/log: /'
+        return 1
+    fi
+    echo "ssh: running, $(authorized_keys) authorized key(s)"
+    report_reach
+}
+
+main() {
+    local cmd="${1:-status}"
+    case "$cmd" in
+        up|down|status) "$cmd" ;;
+        -h|--help) usage ;;
+        *)
+            echo "usage: sandbox-ssh [up|down|status]" >&2
+            return 2 ;;
+    esac
+}
+
+main "$@"

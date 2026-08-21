@@ -23,6 +23,7 @@ skips the menu and doesn't need `gum` at all.
 sandbox              # menu: launch a sandbox, or create/rename/delete a container
 sandbox myproject    # launch "myproject" (offers to create it if new)
 sandbox -d myproject # launch "myproject" headless — see below
+sandbox --ssh-port 2250 myproject   # serve its SSH on this port of the Mac
 sandbox --help
 ```
 
@@ -44,13 +45,13 @@ files into `~/Sandboxes/<name>` in Finder.
 ## Headless
 
 `sandbox -d <name>` launches a sandbox with no terminal attached. The container
-runs detached, the cluster and the [VS Code tunnel](#vs-code-remote-tunnels)
-start the way they always do, and the launcher waits for the tunnel, prints where
-it stands, and returns your prompt. Close the terminal and open the sandbox from
-VS Code.
+runs detached, the cluster, the [VS Code tunnel](#vs-code-remote-tunnels) and
+the [SSH server](#ssh) start the way they always do, and the launcher waits for
+the tunnel, prints where both stand, and returns your prompt. Close the terminal
+and open the sandbox from VS Code or over `ssh`.
 
 ```sh
-sandbox -d myproject       # start it detached, then report the tunnel
+sandbox -d myproject       # start it detached, then report the ways in
 sandbox myproject          # attach a shell whenever you want one
 container stop myproject   # stop it
 ```
@@ -61,10 +62,11 @@ A headless launch differs from an ordinary one in two ways only:
   holds it open and exits on the stop signal. Attaching with `sandbox <name>`
   starts the zellij session then, and leaving that shell no longer stops the
   sandbox.
-- **The tunnel is reported instead of a shell.** The launcher polls
+- **The ways in are reported instead of a shell.** The launcher polls
   `sandbox-code status` inside the sandbox for up to 30 seconds and prints the
-  result, so a sandbox that was never signed in says so rather than coming up
-  silently with no way in. Set `SANDBOX_TUNNEL_WAIT` to change that budget.
+  result, then prints `sandbox-ssh status`, so a sandbox that was never signed in
+  or has no authorized key says so rather than coming up silently with no way in.
+  Set `SANDBOX_TUNNEL_WAIT` to change that budget.
 
 Everything else is the same: same image, same home mount, same capabilities, and
 the container is still removed when it stops.
@@ -141,6 +143,11 @@ commands = [                          # shell run at build time as the sandbox u
 memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
 cpus   = 4                            # container CPU count; omit for the platform default
 
+[ssh]
+enabled = true                        # serve SSH from every sandbox
+port    = 2222                        # first port to hand out; each sandbox gets its own
+address = "0.0.0.0"                   # every address of the Mac; "127.0.0.1" for the Mac alone
+
 [k3s]
 autostart = false                     # start the cluster at launch; otherwise sandbox-k3s up
 disk      = "8G"                      # sparse ext4 image holding cluster state
@@ -163,6 +170,8 @@ node_ip   = "10.99.0.1"               # fixed node address; must not collide wit
   Omit a value to use Apple Container's default (~1 GiB memory). Changing these
   rebuilds the image on next launch, so the new limits take effect on a fresh
   container.
+- `[ssh]` decides whether every sandbox serves SSH, which port each one gets,
+  and which address of the Mac that port is open on — see [SSH](#ssh) below.
 - `[k3s]` sizes and addresses the cluster, and `autostart` decides whether it
   comes up at launch — see [Kubernetes](#kubernetes-k3s) below.
 
@@ -226,6 +235,51 @@ A few consequences worth knowing:
 - `modprobe` warnings in the k3s log are expected — the kernel is monolithic and
   already has everything built in.
 
+## SSH
+
+Every sandbox runs an SSH server. It comes up at launch, next to the
+[VS Code tunnel](#vs-code-remote-tunnels) rather than in place of it, so both
+ways in work at once and a tunnel that stops relaying doesn't lock you out.
+
+```sh
+sandbox-ssh status   # keys authorized, and the command that reaches this sandbox
+sandbox-ssh up       # start it (the launch already did)
+sandbox-ssh down     # stop it; the host key and the keys stay
+```
+
+**A key is the only way in.** The account has no password, and the server
+refuses password logins and root logins. The launcher copies every `*.pub` in
+your Mac's `~/.ssh` into a sandbox the first time it creates the home, so
+usually there is nothing to set up. To authorize another key, append it to
+`~/Sandboxes/<name>/.ssh/authorized_keys` — that file is the sandbox's
+`~/.ssh/authorized_keys`, so you can write it from either side. If your Mac has
+no key yet, `ssh-keygen -t ed25519` makes one.
+
+**One port per sandbox.** The launcher publishes the sandbox's port 22 on a port
+of the Mac that belongs to that sandbox alone, so every sandbox can serve SSH at
+the same time. Ports are handed out from `[ssh].port` upward, recorded in
+`~/Sandboxes/<name>/.sandbox-ssh-port`, and kept for the life of the home. Name
+one yourself with `sandbox --ssh-port <port> <name>`.
+
+**It is reachable from other machines.** The port is open on every address the
+Mac has, so a tailnet, the LAN, or anything else that reaches the Mac reaches the
+sandbox at that port. Set `[ssh].address = "127.0.0.1"` to narrow it to the Mac
+itself, or `[ssh].enabled = false` to turn the server off. See
+[Security scope](#security-scope).
+
+```sh
+ssh -p 2222 you@127.0.0.1      # from the Mac
+ssh -p 2222 you@my-mac         # from a tailnet, LAN, or anywhere else
+```
+
+**The host key survives the container.** It lives in `~/.sandbox-ssh`, in the
+sandbox home, so recreating the container or rebuilding the image doesn't change
+the fingerprint and `ssh` never warns that the host changed.
+
+Because `sftp` is served too, `scp`, `rsync`, and VS Code's Remote-SSH work the
+same way. A logged-in session gets the same `PATH` as a shell in the sandbox, so
+`ssh <sandbox> kubectl get pods` finds the tools.
+
 ## VS Code (Remote Tunnels)
 
 Each sandbox gets the VS Code CLI plus `sandbox-code`, which runs the sandbox as
@@ -274,8 +328,8 @@ Every sandbox runs the same image, built from `image/Dockerfile`:
 
 - **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
-  `man-db` (reads `man sandbox`), `procps`, `python3` (parses `config.toml`),
-  `sudo`, `unzip`, `zsh`.
+  `man-db` (reads `man sandbox`), `openssh-server` (serves [SSH](#ssh)),
+  `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
 - **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
   mount).
 - A **non-root user** (UID matched to your host for bind-mount ownership) with
@@ -329,6 +383,17 @@ and does not protect:
   network. The credentials that keep it running are plain files in the sandbox
   home. Stop it with `sandbox-code down`, and sign out with
   `code tunnel user logout`.
+
+- **SSH is a way in from outside the machine too, and it is on by default.**
+  Each sandbox's port is open on **every** address your Mac has, so anything that
+  reaches the Mac — the LAN, a tailnet, the internet where the Mac is exposed to
+  it — can try that port. What stands in the way is the key: a login needs a
+  private key matching a line of `~/Sandboxes/<name>/.ssh/authorized_keys`, and
+  passwords and root logins are refused. The launcher seeds that file with your
+  Mac's own public keys, so whoever holds a key on your Mac can already get in.
+  Narrow the port to the Mac with `[ssh].address = "127.0.0.1"`, turn the server
+  off everywhere with `[ssh].enabled = false`, or stop it in one sandbox with
+  `sandbox-ssh down`.
 
 **Bottom line: a sandbox is only as secure as the host it runs on.** Don't put
 secrets in a sandbox you wouldn't put on the host, and don't run untrusted code

@@ -10,15 +10,21 @@ usage() {
     cat <<EOF
 sandbox — ad-hoc Linux sandboxes on Apple Container
 
-  sandbox              Open the menu (launch, or create/rename/delete).
-  sandbox <name>       Launch <name> (offers to create it if new).
-  sandbox -d <name>    Launch <name> headless: no terminal, no zellij session.
-  sandbox --help       This help.
+  sandbox                    Open the menu (launch, or create/rename/delete).
+  sandbox <name>             Launch <name> (offers to create it if new).
+  sandbox -d <name>          Launch <name> headless: no terminal, no zellij session.
+  sandbox --ssh-port <port>  Serve <name>'s SSH on this port of the Mac instead.
+  sandbox --help             This help.
 
 A headless sandbox runs detached, with the VS Code tunnel and the cluster up, so
 you can close the terminal and open it from VS Code. Attach a shell to one at any
 time with \`sandbox <name>\`, and stop it from the menu or with
 \`container stop <name>\`.
+
+Every sandbox also serves SSH, on a port of the Mac that is its own, so
+\`ssh -p <port> $USERNAME@<the Mac>\` reaches it from anywhere that can reach the
+Mac, a tailnet included. The port is kept in ~/Sandboxes/<name>/.sandbox-ssh-port
+and stays the same across launches. Only a key gets in; there is no password.
 
 Launching a sandbox that already runs attaches to it and leaves it running. When
 the image changed since it started, \`sandbox\` asks first, because a restart
@@ -56,22 +62,41 @@ report_tunnel() {
     container exec "$name" /usr/local/bin/sandbox-code status || true
 }
 
+report_ssh() {
+    container exec "$1" /usr/local/bin/sandbox-ssh status || true
+}
+
 attach() {
     local name="$1" headless="$2"
     if [ "$headless" = 1 ]; then
         echo "'$name' is already running. Attach a shell with: sandbox $name"
         report_tunnel "$name"
+        report_ssh "$name"
         return 0
     fi
     exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
 }
 
 launch() {
-    local name="$1" headless="${2:-0}" home image running_image
+    local name="$1" headless="${2:-0}" ssh_port="${3:-}" home image running_image
+    local -a ssh_args=()
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
+    if [ -n "$ssh_port" ]; then
+        sandbox_set_ssh_port "$name" "$ssh_port"
+    fi
+
+    if sandbox_ssh_enabled "$REPO/config.toml"; then
+        sandbox_seed_authorized_keys "$name"
+        ssh_args=(--publish "$(sandbox_ssh_address "$REPO/config.toml"):$(sandbox_ssh_port "$REPO/config.toml" "$name"):22")
+    fi
+
     running_image="$(container ls 2>/dev/null | awk -v n="$name" '$1 == n {print $2}')"
+
+    if [ -n "$running_image" ] && [ -n "$ssh_port" ]; then
+        echo "'$name' is already running; port $ssh_port serves it once it next starts."
+    fi
 
     if [ -n "$running_image" ]; then
         if [ "$running_image" = "$(sandbox_image_ref "$("$REPO/bin/sandbox-src-hash")")" ]; then
@@ -91,23 +116,24 @@ launch() {
     image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
 
     if [ "$headless" = 1 ]; then
-        run_container "$name" "$home" --detach "$image" \
+        run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} --detach "$image" \
             /usr/local/bin/sandbox-idle >/dev/null
         echo "'$name' is running headless. Attach a shell with: sandbox $name"
         report_tunnel "$name"
+        report_ssh "$name"
         return 0
     fi
 
-    run_container "$name" "$home" --interactive --tty "$image"
+    run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} --interactive --tty "$image"
 }
 
 create_and_launch() {
-    local name="$1" headless="${2:-0}"
+    local name="$1" headless="${2:-0}" ssh_port="${3:-}"
     if ! validate_name "$name"; then
         echo "Invalid name: '$name' (use letters, digits, '-', '_'; no leading dot)." >&2
         return 1
     fi
-    launch "$name" "$headless"
+    launch "$name" "$headless" "$ssh_port"
 }
 
 remove_container() {
@@ -144,19 +170,30 @@ rename_sandbox() {
 }
 
 main() {
-    local headless=0
-    case "${1:-}" in
-        -h|--help) usage; return 0 ;;
-        -d|--headless) headless=1; shift ;;
-    esac
+    local headless=0 ssh_port=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -h|--help) usage; return 0 ;;
+            -d|--headless) headless=1; shift ;;
+            --ssh-port)
+                shift
+                ssh_port="${1:-}"
+                if ! valid_port "$ssh_port"; then
+                    echo "Invalid port: '$ssh_port' (use 1-65535)." >&2
+                    return 2
+                fi
+                shift ;;
+            -*)
+                echo "Unknown option: '$1'." >&2
+                usage >&2
+                return 2 ;;
+            *) break ;;
+        esac
+    done
 
     case "${1:-}" in
         "") ;;
-        -*)
-            echo "Unknown option: '$1'." >&2
-            usage >&2
-            return 2 ;;
-        *) create_and_launch "$1" "$headless"; return $? ;;
+        *) create_and_launch "$1" "$headless" "$ssh_port"; return $? ;;
     esac
 
     ensure_gum || return 1
@@ -170,10 +207,10 @@ main() {
         "$NEW")
             local name
             name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
-            create_and_launch "$name" "$headless" ;;
+            create_and_launch "$name" "$headless" "$ssh_port" ;;
         "$REN") rename_sandbox ;;
         "$DEL") delete_sandbox ;;
-        *) launch "$choice" "$headless" ;;
+        *) launch "$choice" "$headless" "$ssh_port" ;;
     esac
 }
 
