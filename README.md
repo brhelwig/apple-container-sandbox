@@ -249,11 +249,13 @@ sandbox-ssh down     # stop it; the host key and the keys stay
 
 **A key is the only way in.** The account has no password, and the server
 refuses password logins and root logins. The launcher copies every `*.pub` in
-your Mac's `~/.ssh` into a sandbox the first time it creates the home, so
-usually there is nothing to set up. To authorize another key, append it to
-`~/Sandboxes/<name>/.ssh/authorized_keys` — that file is the sandbox's
-`~/.ssh/authorized_keys`, so you can write it from either side. If your Mac has
-no key yet, `ssh-keygen -t ed25519` makes one.
+your Mac's `~/.ssh`, plus every key already in your Mac's own
+`~/.ssh/authorized_keys`, into a sandbox the first time it creates the home, so
+usually there is nothing to set up — this also covers hardware-backed keys
+(security keys, agent-only keys) that never leave a `.pub` file lying around.
+To authorize another key, append it to `~/Sandboxes/<name>/.ssh/authorized_keys`
+— that file is the sandbox's `~/.ssh/authorized_keys`, so you can write it from
+either side. If your Mac has no key yet, `ssh-keygen -t ed25519` makes one.
 
 **One port per sandbox.** The launcher publishes the sandbox's port 22 on a port
 of the Mac that belongs to that sandbox alone, so every sandbox can serve SSH at
