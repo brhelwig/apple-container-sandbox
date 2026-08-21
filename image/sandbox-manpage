@@ -41,6 +41,9 @@ def main():
     memory = resources.get("memory")
     cpus = resources.get("cpus")
 
+    ssh = config.get("ssh", {})
+    ssh_enabled = bool(ssh.get("enabled", True))
+
     k3s = config.get("k3s", {})
     k3s_autostart = bool(k3s.get("autostart", False))
     k3s_disk = k3s.get("disk", "8G")
@@ -131,6 +134,91 @@ def main():
         "~/.sandbox\\-code.log."
     )
 
+    add(".SH SSH")
+    add(
+        "sandbox\\-ssh runs an SSH server in this sandbox. The Mac reaches it "
+        "with ssh, and with scp, rsync, and everything built on them. It runs "
+        "next to the VS Code tunnel, not in place of it, so both ways in work "
+        "at the same time."
+    )
+    add(".PP")
+    add(
+        "The server starts at launch."
+        if ssh_enabled
+        else "The server does not start at launch, because [ssh].enabled is off "
+        "in config.toml on the Mac. Start it by hand with sandbox\\-ssh up."
+    )
+
+    add(".SS Authorize your key, once")
+    add(
+        "A public key is the only way in. This account has no password, and the "
+        "server refuses password logins and root logins."
+    )
+    add(".IP 1. 4")
+    add(
+        "Run sandbox\\-ssh status. It prints how many keys are authorized. The "
+        "launcher copies every public key from ~/.ssh on the Mac into a new "
+        "sandbox, so there is usually one already, and you are done."
+    )
+    add(".IP 2. 4")
+    add(
+        "Make a key first if the Mac has none. On the Mac, run ssh\\-keygen \\-t "
+        "ed25519. It writes ~/.ssh/id_ed25519.pub, and that file is the key to "
+        "copy."
+    )
+    add(".IP 3. 4")
+    add(
+        "Add a key by appending it to ~/.ssh/authorized_keys, one key to a line. "
+        "On the Mac that same file is ~/Sandboxes/<name>/.ssh/authorized_keys, "
+        "so you can write it from either side."
+    )
+    add(".IP 4. 4")
+    add(
+        "Run sandbox\\-ssh up. It refuses to start while no key is authorized, "
+        "and says so."
+    )
+
+    add(".SS Connect")
+    add(
+        "Run sandbox\\-ssh status. It prints the command to use from the Mac "
+        "itself, which is ssh \\-p <port> <you>@127.0.0.1. Your user name here is "
+        "the one you have on the Mac."
+    )
+    add(".PP")
+    add(
+        "The port belongs to this sandbox alone, so every sandbox on the Mac can "
+        "serve SSH at once. The Mac picks it from [ssh].port upward, writes it to "
+        "~/.sandbox\\-ssh\\-port, and keeps it for the life of the home. To pick "
+        "the port yourself, launch with sandbox \\-\\-ssh\\-port <port> <name>."
+    )
+    add(".PP")
+    add(
+        "The port is open on every address of the Mac, not on the loopback "
+        "address alone. So the same port reaches this sandbox from another "
+        "machine: name the Mac in place of 127.0.0.1, by its LAN address, its "
+        "tailnet name, or any other address that reaches it. [ssh].address in "
+        "config.toml narrows that to one address."
+    )
+    add(".PP")
+    add("For a shorter command, add a Host entry to ~/.ssh/config on that machine:")
+    add(".nf")
+    add("Host <name>")
+    add("  HostName <the Mac>")
+    add("  Port <port>")
+    add("  User <you>")
+    add(".fi")
+    add(".PP")
+    add(
+        "The host key lives in ~/.sandbox\\-ssh, inside the sandbox home, so the "
+        "fingerprint survives container recreation and image rebuilds. ssh will "
+        "not warn you that the host changed."
+    )
+    add(".PP")
+    add(
+        "sandbox\\-ssh down stops the server and keeps the host key and the "
+        "authorized keys. The log is ~/.sandbox\\-ssh.log."
+    )
+
     add(".SH KUBERNETES")
     add(
         "k3s is installed in every sandbox. "
@@ -173,10 +261,10 @@ def main():
     add(".SH HEADLESS")
     add(
         "A sandbox can run with no terminal attached. On the Mac, launch it with "
-        "sandbox \\-d <name>: the container runs detached, the cluster and the "
-        "tunnel start as they always do, and the launcher prints where the "
-        "tunnel stands and then returns. Close the terminal and open the sandbox "
-        "from VS Code."
+        "sandbox \\-d <name>: the container runs detached, the cluster, the "
+        "tunnel and the SSH server start as they always do, and the launcher "
+        "prints where the tunnel and the SSH server stand and then returns. "
+        "Close the terminal, and open the sandbox from VS Code or over ssh."
     )
     add(".PP")
     add(
@@ -220,6 +308,9 @@ def main():
     add(".TP")
     add("sandbox\\-code login | up | down | status")
     add("The VS Code tunnel. See VS CODE above.")
+    add(".TP")
+    add("sandbox\\-ssh up | down | status")
+    add("The SSH server. See SSH above.")
     add(".TP")
     add("sandbox\\-k3s up | down | status")
     add("The single\\-node Kubernetes cluster. See KUBERNETES above.")
@@ -302,6 +393,17 @@ def main():
         "would not put on the Mac itself, and do not run untrusted code here "
         "expecting it to be contained. The README covers the scope in full."
     )
+    add(".PP")
+    add(
+        "The SSH server is a way in from outside the Mac. Its port is open on "
+        "every address the Mac has, so anything that reaches the Mac reaches "
+        "this sandbox: the LAN, a tailnet, and the internet where the Mac is on "
+        "it. What stands in the way is the key: a login needs a private key "
+        "matching a line of ~/.ssh/authorized_keys, and passwords and root "
+        "logins are refused. In config.toml on the Mac, [ssh].address narrows "
+        "the port to one address, such as 127.0.0.1, and [ssh].enabled = false "
+        "turns the server off for every sandbox."
+    )
 
     add(".SH FILES")
     add(".TP")
@@ -310,6 +412,18 @@ def main():
     add(".TP")
     add("~/.sandbox\\-code.log")
     add("The VS Code tunnel log.")
+    add(".TP")
+    add("~/.ssh/authorized_keys")
+    add("The public keys that may log in over SSH.")
+    add(".TP")
+    add("~/.sandbox\\-ssh")
+    add("This sandbox's SSH host key.")
+    add(".TP")
+    add("~/.sandbox\\-ssh\\-port")
+    add("The port on the Mac that reaches this sandbox over SSH.")
+    add(".TP")
+    add("~/.sandbox\\-ssh.log")
+    add("The SSH server log.")
     add(".TP")
     add("/var/log/k3s.log")
     add("The cluster log.")

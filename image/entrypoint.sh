@@ -19,6 +19,10 @@ fi
 
 "$BIN/sandbox-code" up || true
 
+if [ "$(sandbox_config "$CONFIG" ssh enabled true)" = "true" ]; then
+    "$BIN/sandbox-ssh" up || true
+fi
+
 "$BIN/sandbox-setup" || true
 
 exec "$@"

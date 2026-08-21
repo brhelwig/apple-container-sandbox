@@ -14,6 +14,8 @@ pass=0 fail=0
 ok()  { if eval "$1"; then echo "ok   $2"; pass=$((pass+1)); else echo "FAIL $2"; fail=$((fail+1)); fi; }
 no()  { if eval "$1"; then echo "FAIL $2"; fail=$((fail+1)); else echo "ok   $2"; pass=$((pass+1)); fi; }
 
+filemode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
+
 ok 'validate_name myproject'      'accepts myproject'
 ok 'validate_name web-app_2'      'accepts web-app_2'
 no 'validate_name ".hidden"'      'rejects leading dot'
@@ -47,6 +49,65 @@ ok '[ "$(sandbox_config "$TMP/nope.toml" k3s disk 8G)" = "8G" ]'   'config: miss
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
 ok '[ "$(list_sandboxes | tr "\n" " ")" = "alpha beta " ]' 'lists sorted dirs'
 ok '[ -z "$(SANDBOX_HOMES=$TMP/none list_sandboxes)" ]' 'empty when dir absent'
+
+ok 'valid_port 22'                    'port: accepts 22'
+ok 'valid_port 65535'                 'port: accepts the highest port'
+no 'valid_port 0'                     'port: rejects zero'
+no 'valid_port 65536'                 'port: rejects one above the range'
+no 'valid_port 22x'                   'port: rejects a non-number'
+no 'valid_port ""'                    'port: rejects empty'
+no 'valid_port 123456789012345678901' 'port: rejects a number too big to compare'
+
+SCFG="$TMP/ssh.toml"
+SAVED_HOMES="$SANDBOX_HOMES"
+SANDBOX_HOMES="$TMP/sshhomes"
+
+printf '[ssh]\nenabled = true\n' > "$SCFG"
+ok 'sandbox_ssh_enabled "$SCFG"'                        'ssh: on when the config says so'
+printf '[ssh]\nenabled = false\n' > "$SCFG"
+no 'sandbox_ssh_enabled "$SCFG"'                        'ssh: off when the config says so'
+printf '[k3s]\ndisk = "8G"\n' > "$SCFG"
+ok 'sandbox_ssh_enabled "$SCFG"'                        'ssh: on with no [ssh] section'
+ok '[ "$(sandbox_ssh_address "$SCFG")" = "0.0.0.0" ]'   'ssh: every address by default'
+printf '[ssh]\naddress = "127.0.0.1"\n' > "$SCFG"
+ok '[ "$(sandbox_ssh_address "$SCFG")" = "127.0.0.1" ]' 'ssh: one address when set'
+
+printf '[ssh]\nport = 2300\n' > "$SCFG"
+mkdir -p "$SANDBOX_HOMES/one" "$SANDBOX_HOMES/two" "$SANDBOX_HOMES/three"
+ok '[ "$(sandbox_ssh_port "$SCFG" one)" = 2300 ]'       'ssh port: allocates from the configured base'
+ok '[ "$(cat "$SANDBOX_HOMES/one/.sandbox-ssh-port")" = 2300 ]' \
+                                                        'ssh port: records it in the home'
+ok '[ "$(sandbox_ssh_port "$SCFG" one)" = 2300 ]'       'ssh port: keeps it on the next launch'
+ok '[ "$(sandbox_ssh_port "$SCFG" two)" = 2301 ]'       'ssh port: skips a port another sandbox holds'
+printf '2400\n' > "$SANDBOX_HOMES/two/.sandbox-ssh-port"
+ok '[ "$(sandbox_ssh_port "$SCFG" two)" = 2400 ]'       'ssh port: honours a port written by hand'
+ok '[ "$(sandbox_ssh_port "$SCFG" three)" = 2301 ]'     'ssh port: reuses a port nobody holds now'
+printf '[k3s]\ndisk = "8G"\n' > "$SCFG"
+mkdir -p "$SANDBOX_HOMES/four"
+ok '[ "$(sandbox_ssh_port "$SCFG" four)" = 2222 ]'      'ssh port: falls back to 2222 with no base set'
+
+HOSTKEYS="$TMP/hostssh"
+mkdir -p "$HOSTKEYS" "$SANDBOX_HOMES/keyed" "$SANDBOX_HOMES/unkeyed"
+printf 'ssh-ed25519 AAAAfirst mac\n' > "$HOSTKEYS/id_ed25519.pub"
+printf 'ssh-rsa AAAAsecond mac\n' > "$HOSTKEYS/id_rsa.pub"
+seed() { SANDBOX_HOST_SSH_DIR="$1" sandbox_seed_authorized_keys "$2" > "$TMP/seed.out"; }
+AKEYS="$SANDBOX_HOMES/keyed/.ssh/authorized_keys"
+
+ok 'seed "$HOSTKEYS" keyed'                             'seed: runs'
+ok '[ "$(wc -l < "$AKEYS")" -eq 2 ]'                    'seed: copies every public key on the Mac'
+ok 'grep -q AAAAfirst "$AKEYS"'                         'seed: copies the key itself'
+ok 'grep -q "Authorized 2" "$TMP/seed.out"'             'seed: says what it authorized'
+ok '[ "$(filemode "$AKEYS")" = 600 ]'                   'seed: the keys file is private'
+ok '[ "$(filemode "$SANDBOX_HOMES/keyed/.ssh")" = 700 ]' 'seed: the .ssh dir is private'
+printf 'ssh-ed25519 AAAAmine me\n' > "$AKEYS"
+ok 'seed "$HOSTKEYS" keyed'                             'seed: runs against a sandbox that has keys'
+ok '[ "$(wc -l < "$AKEYS")" -eq 1 ]'                    'seed: never overwrites keys already there'
+ok '[ ! -s "$TMP/seed.out" ]'                           'seed: stays quiet when there is nothing to do'
+ok 'seed "$TMP/no-keys-here" unkeyed'                   'seed: runs with no key on the Mac'
+no '[ -e "$SANDBOX_HOMES/unkeyed/.ssh/authorized_keys" ]' \
+                                                        'seed: no key on the Mac -> writes nothing'
+
+SANDBOX_HOMES="$SAVED_HOMES"
 
 echo 'cause: "Rosetta is not installed"' > "$TMP/rosetta.log"
 echo 'error: no space left on device' > "$TMP/other.log"
@@ -150,6 +211,7 @@ chmod +x "$LSTUB/container"
 run_launch() {
     rm -f "$TMP/launch.log"
     LAUNCH_LOG="$TMP/launch.log" SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
+        SANDBOX_HOST_SSH_DIR="$HOSTKEYS" \
         PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "$@" >/dev/null 2>&1
 }
 
@@ -160,6 +222,12 @@ ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
 ok 'grep -qx -- "--tty" "$TMP/launch.log"'          'launch: opens a TTY'
 ok 'grep -qx -- "--init" "$TMP/launch.log"'         'launch: runs an init, so orphans get reaped'
 no 'grep -qx -- "--detach" "$TMP/launch.log"'       'launch: stays in the foreground'
+ok 'grep -qx -- "--publish" "$TMP/launch.log"'      'launch: publishes a port for SSH'
+ok 'grep -qx "0.0.0.0:2222:22" "$TMP/launch.log"'   'launch: every address, to port 22 in the sandbox'
+ok '[ "$(cat "$TMP/homes/testbox/.sandbox-ssh-port")" = 2222 ]' \
+                                                    'launch: records the SSH port in the home'
+ok 'grep -q AAAAfirst "$TMP/homes/testbox/.ssh/authorized_keys"' \
+                                                    'launch: authorizes your keys the first time'
 
 run_launch -d testbox
 ok '[ -s "$TMP/launch.log" ]'                       'headless: reaches container run'
@@ -175,6 +243,35 @@ ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: --headless is the
 run_launch --nope; status=$?
 ok '[ "$status" -eq 2 ]'                            'unknown option: exits 2'
 no '[ -e "$TMP/launch.log" ]'                       'unknown option: launches nothing'
+
+run_launch sshbox
+ok 'grep -qx "0.0.0.0:2223:22" "$TMP/launch.log"'   'ssh: the next sandbox gets the next port'
+run_launch othersshbox
+ok 'grep -qx "0.0.0.0:2224:22" "$TMP/launch.log"'   'ssh: and the one after that, the next again'
+
+run_launch --ssh-port 2345 sshbox
+ok 'grep -qx "0.0.0.0:2345:22" "$TMP/launch.log"'   'ssh-port: publishes the port you name'
+run_launch sshbox
+ok 'grep -qx "0.0.0.0:2345:22" "$TMP/launch.log"'   'ssh-port: it sticks on the next launch'
+
+run_launch -d --ssh-port 2346 headlessssh
+ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'ssh-port: combines with headless'
+ok 'grep -qx "0.0.0.0:2346:22" "$TMP/launch.log"'   'ssh-port: publishes under headless too'
+
+run_launch --ssh-port 99999 toobig; status=$?
+ok '[ "$status" -eq 2 ]'                            'ssh-port: rejects a port out of range'
+no '[ -e "$TMP/launch.log" ]'                       'ssh-port: launches nothing'
+
+printf '[ssh]\nenabled = false\n' > "$REPOCOPY/config.toml"
+run_launch sshoff
+ok '[ -s "$TMP/launch.log" ]'                       'ssh off: still launches'
+no 'grep -qx -- "--publish" "$TMP/launch.log"'      'ssh off: publishes nothing'
+
+printf '[ssh]\naddress = "127.0.0.1"\nport = 2500\n' > "$REPOCOPY/config.toml"
+run_launch loopbackonly
+ok 'grep -qx "127.0.0.1:2500:22" "$TMP/launch.log"' 'ssh address: publishes on that address alone'
+
+cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
 ASTUB="$TMP/astub"
 mkdir -p "$ASTUB"
@@ -293,6 +390,65 @@ ok 'grep -q -- "--accept-server-license-terms" "$TMP/code-stub.log"' \
                                                         'sandbox-code: up passes the license flag'
 ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names the tunnel'
 
+SSHH="$DIR/../image/sandbox-ssh"
+SSHHOME="$TMP/sshhome"
+SSHBIN="$TMP/sshbin"
+mkdir -p "$SSHHOME" "$SSHBIN"
+cat > "$SSHBIN/sudo" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "$@" >> "$SUDO_LOG"
+STUBEOF
+chmod +x "$SSHBIN/sudo"
+
+run_ssh() {
+    SUDO_LOG="$TMP/sshd.log" HOME="$SSHHOME" \
+        SANDBOX_SSHD=/fake/sshd SANDBOX_SSHD_CONFIG=/fake/sshd.conf \
+        SANDBOX_SSHD_PID_FILE="$TMP/sshd.pid" SANDBOX_SSHD_PRIVSEP_DIR="$TMP/privsep" \
+        PATH="$SSHBIN:$PATH" bash "$SSHH" "$@" > "$TMP/ssh.out" 2>&1
+}
+
+rm -f "$TMP/sshd.log"
+no 'run_ssh status'                                     'sandbox-ssh: status with no key -> fails'
+ok 'grep -q "not running" "$TMP/ssh.out"'               'sandbox-ssh: status says the server is down'
+ok 'grep -q "authorized_keys" "$TMP/ssh.out"'           'sandbox-ssh: status names the keys file'
+no 'run_ssh up'                                         'sandbox-ssh: up with no key -> fails'
+ok 'grep -q "Sandboxes" "$TMP/ssh.out"'                 'sandbox-ssh: up says where to put a key'
+ok '[ ! -e "$TMP/sshd.log" ]'                           'sandbox-ssh: up with no key starts nothing'
+
+mkdir -p "$SSHHOME/.ssh" "$SSHHOME/.sandbox-ssh"
+printf '# a comment\n\nssh-ed25519 AAAAmine me\n' > "$SSHHOME/.ssh/authorized_keys"
+printf 'host key\n' > "$SSHHOME/.sandbox-ssh/ssh_host_ed25519_key"
+printf '2222\n' > "$SSHHOME/.sandbox-ssh-port"
+
+ok 'run_ssh up'                                         'sandbox-ssh: up with a key starts the server'
+ok 'grep -q -- "-f /fake/sshd.conf" "$TMP/sshd.log"'    'sandbox-ssh: up names the config'
+ok 'grep -q -- "-h $SSHHOME/.sandbox-ssh/ssh_host_ed25519_key" "$TMP/sshd.log"' \
+                                                        'sandbox-ssh: up serves the sandbox host key'
+ok 'grep -q "PidFile=$TMP/sshd.pid" "$TMP/sshd.log"'    'sandbox-ssh: up sets the pid file'
+ok 'grep -q -- "-E $SSHHOME/.sandbox-ssh.log" "$TMP/sshd.log"' \
+                                                        'sandbox-ssh: up logs into the home'
+ok 'grep -q "mkdir -p $TMP/privsep" "$TMP/sshd.log"'    'sandbox-ssh: up makes the privilege separation dir'
+ok 'grep -q "ssh -p 2222" "$TMP/ssh.out"'               'sandbox-ssh: up prints the ssh command'
+ok 'grep -q "tailnet" "$TMP/ssh.out"'                   'sandbox-ssh: up says it is reachable from elsewhere'
+
+rm -f "$SSHHOME/.sandbox-ssh-port"
+ok 'run_ssh up'                                         'sandbox-ssh: up runs with no port recorded'
+ok 'grep -q "relaunch the sandbox" "$TMP/ssh.out"'      'sandbox-ssh: up says to relaunch for a port'
+
+ok 'run_ssh down'                                       'sandbox-ssh: down with no server runs'
+ok 'grep -q "not running" "$TMP/ssh.out"'               'sandbox-ssh: down says there was nothing to stop'
+
+ok 'run_ssh --help'                                     'sandbox-ssh: --help runs'
+ok 'grep -q "sandbox-ssh up" "$TMP/ssh.out"'            'sandbox-ssh: --help explains it'
+run_ssh nonsense; status=$?
+ok '[ "$status" -eq 2 ]'                                'sandbox-ssh: an unknown command exits 2'
+
+SSHDCONF="$DIR/../image/sandbox-sshd.conf"
+ok 'grep -qx "PasswordAuthentication no" "$SSHDCONF"'   'sshd config: refuses passwords'
+ok 'grep -qx "PermitRootLogin no" "$SSHDCONF"'          'sshd config: refuses root'
+ok 'grep -qx "PubkeyAuthentication yes" "$SSHDCONF"'    'sshd config: takes keys'
+ok 'grep -q "^Subsystem sftp" "$SSHDCONF"'              'sshd config: serves sftp, so scp and rsync work'
+
 MANGEN="$DIR/../image/sandbox-manpage"
 MCFG="$TMP/man.toml"
 MOUT="$TMP/sandbox.7"
@@ -327,6 +483,11 @@ ok 'grep -q "config.toml" "$MOUT"'                      'sandbox-manpage: says w
 ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the base lists'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
+ok 'grep -qF "sandbox\\-ssh up" "$MOUT"'                'sandbox-manpage: documents sandbox-ssh'
+ok 'grep -q "authorized_keys" "$MOUT"'                  'sandbox-manpage: says where a key goes'
+ok 'grep -qF "ssh\\-keygen \\-t ed25519" "$MOUT"'       'sandbox-manpage: says how to make a key'
+ok 'grep -q "no password" "$MOUT"'                      'sandbox-manpage: says there is no password'
+ok 'grep -q "tailnet" "$MOUT"'                          'sandbox-manpage: says it reaches beyond the Mac'
 ok 'grep -q "enter the code it prints" "$MOUT"'         'sandbox-manpage: gives the tunnel sign-in steps'
 ok 'grep -qF "sandbox\\-code status" "$MOUT"'           'sandbox-manpage: says how to get the tunnel link'
 ok 'grep -qF "use\\-context k3s" "$MOUT"'               'sandbox-manpage: says how to select the cluster context'
@@ -341,6 +502,14 @@ ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 6 ]'          'sandbox-manpage: says s
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 
+ok 'grep -q "The server starts at launch" "$MOUT"'      'sandbox-manpage: says the SSH server starts at launch'
+printf '[ssh]\nenabled = false\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page with ssh off'
+ok 'grep -q "does not start at launch, because \[ssh\]" "$MOUT"' \
+                                                        'sandbox-manpage: says so when ssh is off'
+
+printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
+ok 'gen_man'                                            'sandbox-manpage: writes a page again'
 ok 'grep -q "does not start at launch" "$MOUT"'         'sandbox-manpage: says k3s stays stopped by default'
 printf '[k3s]\nautostart = true\n' > "$MCFG"
 ok 'gen_man'                                            'sandbox-manpage: writes a page with k3s autostart on'
@@ -352,7 +521,7 @@ EBIN="$TMP/ebin"
 ELOG="$TMP/entry.log"
 ECFG="$TMP/entry.toml"
 mkdir -p "$EBIN" "$TMP/ehome"
-for helper in sandbox-kubeconfig sandbox-k3s sandbox-code sandbox-setup; do
+for helper in sandbox-kubeconfig sandbox-k3s sandbox-code sandbox-ssh sandbox-setup; do
     printf '#!/bin/sh\necho "%s $*" >> "$SANDBOX_TEST_LOG"\n' "$helper" > "$EBIN/$helper"
     chmod +x "$EBIN/$helper"
 done
@@ -366,8 +535,18 @@ printf '[k3s]\ndisk = "8G"\n' > "$ECFG"
 ok 'run_entrypoint'                        'entrypoint: runs'
 ok 'grep -q "sandbox-kubeconfig" "$ELOG"'  'entrypoint: builds the kubeconfig'
 ok 'grep -q "sandbox-code up" "$ELOG"'     'entrypoint: starts the VS Code tunnel'
+ok 'grep -q "sandbox-ssh up" "$ELOG"'      'entrypoint: no [ssh] section -> starts the SSH server'
 ok 'grep -q "sandbox-setup" "$ELOG"'       'entrypoint: runs the per-launch setup'
 no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: no autostart key -> k3s stays stopped'
+
+printf '[ssh]\nenabled = false\n' > "$ECFG"
+ok 'run_entrypoint'                        'entrypoint: runs with ssh off'
+no 'grep -q "sandbox-ssh" "$ELOG"'         'entrypoint: ssh disabled -> no SSH server'
+ok 'grep -q "sandbox-code up" "$ELOG"'     'entrypoint: ssh disabled -> the tunnel still starts'
+
+printf '[ssh]\nenabled = true\n' > "$ECFG"
+ok 'run_entrypoint'                        'entrypoint: runs with ssh on'
+ok 'grep -q "sandbox-ssh up" "$ELOG"'      'entrypoint: ssh enabled -> starts the SSH server'
 
 printf '[k3s]\nautostart = false\n' > "$ECFG"
 ok 'run_entrypoint'                        'entrypoint: runs with autostart off'
@@ -423,8 +602,6 @@ KUBE="$DIR/../image/sandbox-kubeconfig"
 KHOME="$TMP/kubehome"
 KSHIM="$TMP/kubeshim"
 KSRC="$TMP/k3s-src.yaml"
-
-filemode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null; }
 
 run_kubeconfig() {
     HOME="$KHOME" SANDBOX_KUBE_DIR="$KSHIM" SANDBOX_K3S_KUBECONFIG="$KSRC" \
