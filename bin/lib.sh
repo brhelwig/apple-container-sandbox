@@ -98,12 +98,16 @@ sandbox_ssh_port() {
 }
 
 sandbox_seed_authorized_keys() {
-    local name="$1" dir keys="" pub count
+    local name="$1" dir keys="" pub host_ssh_dir count
     dir="$(sandbox_home_path "$name")/.ssh"
     if [ -e "$dir/authorized_keys" ]; then return 0; fi
-    for pub in "${SANDBOX_HOST_SSH_DIR:-$HOME/.ssh}"/*.pub; do
+    host_ssh_dir="${SANDBOX_HOST_SSH_DIR:-$HOME/.ssh}"
+    for pub in "$host_ssh_dir"/*.pub; do
         if [ -f "$pub" ]; then keys="$keys$(cat "$pub")"$'\n'; fi
     done
+    if [ -f "$host_ssh_dir/authorized_keys" ]; then
+        keys="$keys$(cat "$host_ssh_dir/authorized_keys")"$'\n'
+    fi
     if [ -z "$keys" ]; then return 0; fi
     mkdir -p "$dir"
     chmod 700 "$dir"

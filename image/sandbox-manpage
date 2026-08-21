@@ -157,8 +157,9 @@ def main():
     add(".IP 1. 4")
     add(
         "Run sandbox\\-ssh status. It prints how many keys are authorized. The "
-        "launcher copies every public key from ~/.ssh on the Mac into a new "
-        "sandbox, so there is usually one already, and you are done."
+        "launcher copies every public key from ~/.ssh on the Mac, plus every "
+        "key already in ~/.ssh/authorized_keys there, into a new sandbox, so "
+        "there is usually one already, and you are done."
     )
     add(".IP 2. 4")
     add(

@@ -107,6 +107,20 @@ ok 'seed "$TMP/no-keys-here" unkeyed'                   'seed: runs with no key 
 no '[ -e "$SANDBOX_HOMES/unkeyed/.ssh/authorized_keys" ]' \
                                                         'seed: no key on the Mac -> writes nothing'
 
+AKONLY="$TMP/hostssh-akonly"
+mkdir -p "$AKONLY" "$SANDBOX_HOMES/akonly"
+printf 'ssh-ed25519 AAAAthird mac\n' > "$AKONLY/authorized_keys"
+KEYS_AKONLY="$SANDBOX_HOMES/akonly/.ssh/authorized_keys"
+ok 'seed "$AKONLY" akonly'                              'seed: runs with only a host authorized_keys'
+ok 'grep -q AAAAthird "$KEYS_AKONLY"'                   'seed: falls back to the host authorized_keys'
+
+mkdir -p "$SANDBOX_HOMES/both"
+printf 'ssh-ed25519 AAAAfourth mac\n' > "$HOSTKEYS/authorized_keys"
+KEYS_BOTH="$SANDBOX_HOMES/both/.ssh/authorized_keys"
+ok 'seed "$HOSTKEYS" both'                              'seed: runs with both pub files and authorized_keys'
+ok 'grep -q AAAAfirst "$KEYS_BOTH" && grep -q AAAAfourth "$KEYS_BOTH"' \
+                                                        'seed: merges pub files with the host authorized_keys'
+
 SANDBOX_HOMES="$SAVED_HOMES"
 
 echo 'cause: "Rosetta is not installed"' > "$TMP/rosetta.log"
