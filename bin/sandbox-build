@@ -6,7 +6,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 USERNAME="${SANDBOX_USER:-${USER:-dev}}"
 HASH="$("$REPO/bin/sandbox-src-hash")"
-IMAGE="${IMAGE:-sandbox:$HASH}"
+IMAGE="$(sandbox_image_ref "$HASH")"
 
 if container image ls 2>/dev/null | grep -q "sandbox.*$HASH"; then
     echo "$IMAGE already built." >&2

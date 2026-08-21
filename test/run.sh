@@ -176,6 +176,54 @@ run_launch --nope; status=$?
 ok '[ "$status" -eq 2 ]'                            'unknown option: exits 2'
 no '[ -e "$TMP/launch.log" ]'                       'unknown option: launches nothing'
 
+ASTUB="$TMP/astub"
+mkdir -p "$ASTUB"
+cat > "$ASTUB/container" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$ATTACH_LOG"
+if [ "$1" = ls ]; then
+    echo 'ID  IMAGE  OS  ARCH  STATE  ADDR'
+    [ -n "${RUNNING_IMAGE:-}" ] && echo "testbox  $RUNNING_IMAGE  linux  arm64  running  192.168.64.2"
+fi
+exit 0
+STUBEOF
+cat > "$ASTUB/gum" <<'STUBEOF'
+#!/usr/bin/env bash
+exit "$GUM_CONFIRM"
+STUBEOF
+chmod +x "$ASTUB/container" "$ASTUB/gum"
+
+CURRENT="sandbox:$(bash "$REPOCOPY/bin/sandbox-src-hash")"
+
+run_attach() {
+    rm -f "$TMP/attach.log"
+    ATTACH_LOG="$TMP/attach.log" RUNNING_IMAGE="$1" GUM_CONFIRM="${2:-1}" \
+        SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
+        PATH="$ASTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "${3:-testbox}" >/dev/null 2>&1
+}
+
+run_attach "$CURRENT"
+ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'running: attaches a shell'
+no 'grep -q "^run " "$TMP/attach.log"'              'running: starts no second container'
+no 'grep -q "^stop " "$TMP/attach.log"'             'running: stops nothing'
+no 'grep -q "^delete " "$TMP/attach.log"'           'running: deletes nothing'
+no 'grep -q "^build " "$TMP/attach.log"'            'running: builds no image'
+
+run_attach sandbox:stale 1
+ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'stale image, declined: attaches anyway'
+no 'grep -q "^stop " "$TMP/attach.log"'             'stale image, declined: leaves it running'
+no 'grep -q "^delete " "$TMP/attach.log"'           'stale image, declined: deletes nothing'
+
+run_attach sandbox:stale 0
+ok 'grep -q "^stop testbox$" "$TMP/attach.log"'         'stale image, confirmed: stops it'
+ok 'grep -q "^delete --force testbox$" "$TMP/attach.log"' 'stale image, confirmed: deletes it'
+ok 'grep -q "^run --rm" "$TMP/attach.log"'              'stale image, confirmed: starts it again'
+no 'grep -q "sandbox-zellij$" "$TMP/attach.log"'        'stale image, confirmed: attaches to nothing'
+
+run_attach "" 1 otherbox
+ok 'grep -q "^run --rm" "$TMP/attach.log"'          'not running: starts it'
+no 'grep -q "confirm" "$TMP/attach.log"'            'not running: asks nothing'
+
 DSTUB="$TMP/dstub"
 mkdir -p "$DSTUB"
 cat > "$DSTUB/container" <<'STUBEOF'
