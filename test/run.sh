@@ -109,10 +109,22 @@ no '[ -e "$SANDBOX_HOMES/unkeyed/.ssh/authorized_keys" ]' \
 
 SANDBOX_HOMES="$SAVED_HOMES"
 
-echo 'cause: "Rosetta is not installed"' > "$TMP/rosetta.log"
-echo 'error: no space left on device' > "$TMP/other.log"
-ok 'rosetta_bootstrap_failure "$TMP/rosetta.log"' 'spots the Rosetta failure'
-no 'rosetta_bootstrap_failure "$TMP/other.log"' 'ignores other failures'
+DIGSTUB="$TMP/digstub"
+mkdir -p "$DIGSTUB"
+cat > "$DIGSTUB/container" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s' "$INSPECT_JSON"
+STUBEOF
+chmod +x "$DIGSTUB/container"
+digest_of() { INSPECT_JSON="$1" PATH="$DIGSTUB:$PATH" sandbox_image_digest ref; }
+
+ok '[ "$(digest_of "[{\"manifest\":{\"digest\":\"sha256:abc\"}}]")" = "sha256:abc" ]' \
+                                                'image digest: finds a nested digest'
+ok '[ "$(digest_of "{\"digest\":\"sha256:top\"}")" = "sha256:top" ]' \
+                                                'image digest: finds a top-level digest'
+ok '[ -z "$(digest_of "{\"digest\":\"unqualified\"}")" ]' 'image digest: takes sha256 digests alone'
+ok '[ -z "$(digest_of "")" ]'                   'image digest: empty inspect -> empty'
+ok '[ -z "$(digest_of "not json")" ]'           'image digest: bad json -> empty'
 
 GSTUB="$TMP/gumstub"
 
@@ -155,49 +167,42 @@ cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
 cat > "$STUB/container" <<'STUBEOF'
 #!/usr/bin/env bash
-case "$1" in
-    build)
-        printf 'x' >> "$STUB/attempts"
-        if [ "$(wc -c < "$STUB/attempts")" -le "$FAIL_BUILDS" ]; then
-            echo "$BUILD_ERROR" >&2
-            exit 1
-        fi
-        echo 'build ok' ;;
+case "$1 ${2:-}" in
+    'image pull')
+        echo "pull $3" >> "$STUB/pull.log"
+        exit "$PULL_STATUS" ;;
+    'image inspect')
+        [ "$LOCAL_IMAGE" = yes ] || exit 1
+        printf '[{"digest":"sha256:local"}]' ;;
     *) exit 0 ;;
 esac
 STUBEOF
-cat > "$STUB/sudo" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "$@" >> "$STUB/sudo.log"
-STUBEOF
-cat > "$STUB/gum" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "$@" >> "$STUB/gum.log"
-exit "$GUM_CONFIRM"
-STUBEOF
-chmod +x "$STUB/container" "$STUB/sudo" "$STUB/gum"
+chmod +x "$STUB/container"
 
-ROSETTA_ERR='Error: internalError: "failed to bootstrap container buildkit (cause: "Rosetta is not installed"")"'
+PUBLISHED=ghcr.io/brhelwig/apple-container-sandbox:latest
 
-run_build() {
-    rm -f "$STUB/attempts" "$STUB/sudo.log" "$STUB/gum.log"
-    out="$(env STUB="$STUB" FAIL_BUILDS="$1" GUM_CONFIRM="$2" BUILD_ERROR="$3" \
-        PATH="$STUB:$PATH" bash "$REPOCOPY/bin/sandbox-build" 2>"$TMP/err")"
+run_pull() {
+    rm -f "$STUB/pull.log"
+    out="$(env STUB="$STUB" PULL_STATUS="$1" LOCAL_IMAGE="$2" \
+        PATH="$STUB:$PATH" bash "$REPOCOPY/bin/sandbox-pull" 2>"$TMP/err")"
 }
 
-run_build 1 0 "$ROSETTA_ERR"; status=$?
-ok '[ "$status" -eq 0 ]'                        'consent: retried build succeeds'
-ok 'grep -q -- "--install-rosetta" "$STUB/sudo.log"' 'consent: installs Rosetta'
-ok '[ "${out#sandbox:}" != "$out" ]'            'consent: prints the image ref'
+run_pull 0 no; status=$?
+ok '[ "$status" -eq 0 ]'                        'pull: succeeds'
+ok 'grep -q "pull $PUBLISHED" "$STUB/pull.log"' 'pull: pulls the published ref'
+ok '[ "$out" = "$PUBLISHED" ]'                  'pull: prints the image ref'
 
-run_build 9 1 "$ROSETTA_ERR"; status=$?
-ok '[ "$status" -ne 0 ]'                        'declined: fails'
-ok '[ ! -e "$STUB/sudo.log" ]'                  'declined: installs nothing'
-ok 'grep -q "rosetta = false" "$TMP/err"'       'declined: names the arm64-only opt-out'
+run_pull 1 yes; status=$?
+ok '[ "$status" -eq 0 ]'                        'pull failed, local copy: still succeeds'
+ok 'grep -q "local copy" "$TMP/err"'            'pull failed, local copy: says so'
+ok '[ "$out" = "$PUBLISHED" ]'                  'pull failed, local copy: prints the image ref'
 
-run_build 9 0 'Error: no space left on device'; status=$?
-ok '[ "$status" -ne 0 ]'                        'other failure: fails'
-ok '[ ! -e "$STUB/gum.log" ]'                   'other failure: no prompt'
+run_pull 1 no; status=$?
+ok '[ "$status" -ne 0 ]'                        'pull failed, no local copy: fails'
+ok 'grep -q "no local copy" "$TMP/err"'         'pull failed, no local copy: says so'
+
+IMAGE=custom:ref run_pull 0 no
+ok '[ "$out" = "custom:ref" ]'                  'pull: honours the IMAGE override'
 
 LSTUB="$TMP/lstub"
 mkdir -p "$LSTUB"
@@ -228,6 +233,9 @@ ok '[ "$(cat "$TMP/homes/testbox/.sandbox-ssh-port")" = 2222 ]' \
                                                     'launch: records the SSH port in the home'
 ok 'grep -q AAAAfirst "$TMP/homes/testbox/.ssh/authorized_keys"' \
                                                     'launch: authorizes your keys the first time'
+ok 'grep -q ":/home/dev$" "$TMP/launch.log"'        'launch: mounts the home at /home/dev'
+ok '[ -f "$TMP/homes/testbox/.sandbox-config.toml" ]' \
+                                                    'launch: copies the runtime config into the home'
 
 run_launch -d testbox
 ok '[ -s "$TMP/launch.log" ]'                       'headless: reaches container run'
@@ -278,10 +286,13 @@ mkdir -p "$ASTUB"
 cat > "$ASTUB/container" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$ATTACH_LOG"
-if [ "$1" = ls ]; then
-    echo 'ID  IMAGE  OS  ARCH  STATE  ADDR'
-    [ -n "${RUNNING_IMAGE:-}" ] && echo "testbox  $RUNNING_IMAGE  linux  arm64  running  192.168.64.2"
-fi
+case "$1 ${2:-}" in
+    'ls ')
+        echo 'ID  IMAGE  OS  ARCH  STATE  ADDR'
+        [ -n "${RUNNING:-}" ] && echo "testbox  ghcr.io/brhelwig/apple-container-sandbox:latest  linux  arm64  running  192.168.64.2" ;;
+    'image inspect')
+        [ -n "${CURRENT_DIGEST:-}" ] && printf '[{"digest":"%s"}]' "$CURRENT_DIGEST" ;;
+esac
 exit 0
 STUBEOF
 cat > "$ASTUB/gum" <<'STUBEOF'
@@ -290,36 +301,46 @@ exit "$GUM_CONFIRM"
 STUBEOF
 chmod +x "$ASTUB/container" "$ASTUB/gum"
 
-CURRENT="sandbox:$(bash "$REPOCOPY/bin/sandbox-src-hash")"
-
 run_attach() {
     rm -f "$TMP/attach.log"
-    ATTACH_LOG="$TMP/attach.log" RUNNING_IMAGE="$1" GUM_CONFIRM="${2:-1}" \
+    ATTACH_LOG="$TMP/attach.log" RUNNING="$1" CURRENT_DIGEST="$2" GUM_CONFIRM="${3:-1}" \
         SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
-        PATH="$ASTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "${3:-testbox}" >/dev/null 2>&1
+        PATH="$ASTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "${4:-testbox}" >/dev/null 2>&1
 }
 
-run_attach "$CURRENT"
+printf 'sha256:current\n' > "$TMP/homes/testbox/.sandbox-image-digest"
+
+run_attach yes sha256:current
 ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'running: attaches a shell'
 no 'grep -q "^run " "$TMP/attach.log"'              'running: starts no second container'
 no 'grep -q "^stop " "$TMP/attach.log"'             'running: stops nothing'
 no 'grep -q "^delete " "$TMP/attach.log"'           'running: deletes nothing'
-no 'grep -q "^build " "$TMP/attach.log"'            'running: builds no image'
+ok 'grep -q "^image pull" "$TMP/attach.log"'        'running: still checks for a newer image'
 
-run_attach sandbox:stale 1
+run_attach yes ""
+ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'running, no digest known: attaches a shell'
+no 'grep -q "^stop " "$TMP/attach.log"'             'running, no digest known: stops nothing'
+
+run_attach yes sha256:newer 1
 ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'stale image, declined: attaches anyway'
 no 'grep -q "^stop " "$TMP/attach.log"'             'stale image, declined: leaves it running'
 no 'grep -q "^delete " "$TMP/attach.log"'           'stale image, declined: deletes nothing'
+ok '[ "$(cat "$TMP/homes/testbox/.sandbox-image-digest")" = sha256:current ]' \
+                                                    'stale image, declined: keeps the recorded digest'
 
-run_attach sandbox:stale 0
+run_attach yes sha256:newer 0
 ok 'grep -q "^stop testbox$" "$TMP/attach.log"'         'stale image, confirmed: stops it'
 ok 'grep -q "^delete --force testbox$" "$TMP/attach.log"' 'stale image, confirmed: deletes it'
 ok 'grep -q "^run --rm" "$TMP/attach.log"'              'stale image, confirmed: starts it again'
 no 'grep -q "sandbox-zellij$" "$TMP/attach.log"'        'stale image, confirmed: attaches to nothing'
+ok '[ "$(cat "$TMP/homes/testbox/.sandbox-image-digest")" = sha256:newer ]' \
+                                                        'stale image, confirmed: records the new digest'
 
-run_attach "" 1 otherbox
+run_attach "" sha256:current 1 otherbox
 ok 'grep -q "^run --rm" "$TMP/attach.log"'          'not running: starts it'
 no 'grep -q "confirm" "$TMP/attach.log"'            'not running: asks nothing'
+ok '[ "$(cat "$TMP/homes/otherbox/.sandbox-image-digest")" = sha256:current ]' \
+                                                    'not running: records the launched digest'
 
 DSTUB="$TMP/dstub"
 mkdir -p "$DSTUB"
@@ -456,14 +477,6 @@ gen_man() { python3 "$MANGEN" "$MCFG" "$@" > "$MOUT" 2>"$TMP/man.err"; }
 BASE='"curl man-db zsh" "podman" "terraform-linters/tap" "cloudflared gh" ""'
 
 cat > "$MCFG" <<'TOML'
-[apt]
-packages = ["ripgrep"]
-[brew]
-taps = ["hashicorp/tap"]
-formulae = ["jq"]
-casks = ["tflint"]
-[post_install]
-commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
 [resources]
 memory = "4G"
 cpus = 4
@@ -473,14 +486,12 @@ TOML
 ok "gen_man $BASE"                                      'sandbox-manpage: writes a page'
 ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
 ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
-ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: merges the base and added apt packages'
-ok 'grep -q "cloudflared, gh, jq" "$MOUT"'              'sandbox-manpage: merges the base and added formulae'
-ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists an added tap'
-ok 'grep -qF "terraform\\-linters/tap" "$MOUT"'         'sandbox-manpage: lists a base tap'
-ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists an added cask'
-ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
-ok 'grep -q "config.toml" "$MOUT"'                      'sandbox-manpage: says where to add a tool'
-ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the base lists'
+ok 'grep -q "^podman$" "$MOUT"'                         'sandbox-manpage: lists the apt packages'
+ok 'grep -q "cloudflared, gh" "$MOUT"'                  'sandbox-manpage: lists the formulae'
+ok 'grep -qF "terraform\\-linters/tap" "$MOUT"'         'sandbox-manpage: lists a tap'
+ok 'grep -q "Dockerfile" "$MOUT"'                       'sandbox-manpage: says where to add a tool'
+ok 'grep -q "ghcr.io" "$MOUT"'                          'sandbox-manpage: names the published image'
+ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the package lists'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
 ok 'grep -qF "sandbox\\-ssh up" "$MOUT"'                'sandbox-manpage: documents sandbox-ssh'
@@ -498,7 +509,7 @@ no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escape
 
 printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
 ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing installed on top'
-ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 6 ]'          'sandbox-manpage: says so where a list is empty'
+ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 5 ]'          'sandbox-manpage: says so where a list is empty'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
 
@@ -555,6 +566,20 @@ no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: autostart false -> k3s s
 printf '[k3s]\nautostart = true\n' > "$ECFG"
 ok 'run_entrypoint'                        'entrypoint: runs with autostart on'
 ok 'grep -q "sandbox-k3s up" "$ELOG"'      'entrypoint: autostart true -> starts k3s'
+
+run_entrypoint_default() {
+    : > "$ELOG"
+    HOME="$TMP/ehome" SANDBOX_BIN="$EBIN" SANDBOX_TEST_LOG="$ELOG" bash "$ENTRY" true
+}
+
+printf '[k3s]\nautostart = true\n' > "$TMP/ehome/.sandbox-config.toml"
+ok 'run_entrypoint_default'                'entrypoint: runs with a home config'
+ok 'grep -q "sandbox-k3s up" "$ELOG"'      'entrypoint: reads the home config when unset'
+
+rm -f "$TMP/ehome/.sandbox-config.toml"
+ok 'run_entrypoint_default'                'entrypoint: runs with no config anywhere'
+ok 'grep -q "sandbox-ssh up" "$ELOG"'      'entrypoint: no config anywhere -> defaults apply'
+no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: no config anywhere -> k3s stays stopped'
 
 NICE="$DIR/../image/sandbox-nice.sh"
 if [ -e /proc/self/oom_score_adj ]; then

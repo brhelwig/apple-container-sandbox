@@ -2,7 +2,11 @@
 set -euo pipefail
 
 BIN="${SANDBOX_BIN:-/usr/local/bin}"
-CONFIG="${SANDBOX_CONFIG:-/etc/sandbox-config.toml}"
+CONFIG="${SANDBOX_CONFIG:-}"
+if [ -z "$CONFIG" ]; then
+    CONFIG="$HOME/.sandbox-config.toml"
+    [ -r "$CONFIG" ] || CONFIG=/etc/sandbox-config.toml
+fi
 
 . "${SANDBOX_CONFIG_LIB:-/etc/sandbox-config.sh}"
 

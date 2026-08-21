@@ -20,22 +20,16 @@ def argument(index):
     return sys.argv[index].split() if len(sys.argv) > index else []
 
 
-def merged(base, added):
-    return sorted(set(base) | set(added))
-
-
 def main():
     config_path = sys.argv[1]
     base_packages = argument(2)
     with open(config_path, "rb") as f:
         config = tomllib.load(f)
 
-    brew = config.get("brew", {})
-    apt = merged(argument(3), config.get("apt", {}).get("packages", []))
-    taps = merged(argument(4), brew.get("taps", []))
-    formulae = merged(argument(5), brew.get("formulae", []))
-    casks = merged(argument(6), brew.get("casks", []))
-    commands = config.get("post_install", {}).get("commands", [])
+    apt = sorted(set(argument(3)))
+    taps = sorted(set(argument(4)))
+    formulae = sorted(set(argument(5)))
+    casks = sorted(set(argument(6)))
 
     resources = config.get("resources", {})
     memory = resources.get("memory")
@@ -79,8 +73,8 @@ def main():
     add(".PP")
     add(
         "Nothing else persists. A package installed by hand is gone the next time "
-        "the image is rebuilt. To keep a tool, add it to config.toml on the Mac "
-        "and relaunch. See CHANGING WHAT IS INSTALLED below."
+        "the image is rebuilt. To keep a tool, add it to the image. See CHANGING "
+        "WHAT IS INSTALLED below."
     )
 
     add(".SH YOUR SESSION")
@@ -181,8 +175,8 @@ def main():
     add(".SS Connect")
     add(
         "Run sandbox\\-ssh status. It prints the command to use from the Mac "
-        "itself, which is ssh \\-p <port> <you>@127.0.0.1. Your user name here is "
-        "the one you have on the Mac."
+        "itself, which is ssh \\-p <port> dev@127.0.0.1. The user name is dev in "
+        "every sandbox."
     )
     add(".PP")
     add(
@@ -205,7 +199,7 @@ def main():
     add("Host <name>")
     add("  HostName <the Mac>")
     add("  Port <port>")
-    add("  User <you>")
+    add("  User dev")
     add(".fi")
     add(".PP")
     add(
@@ -339,9 +333,8 @@ def main():
 
     add(".SH INSTALLED TOOLS")
     add(
-        "Every sandbox gets the same base set from the image build. config.toml "
-        "on the Mac adds to that set. The lists below are what this image has, "
-        "from both."
+        "Every sandbox gets the same set, baked into the published image. The "
+        "lists below are what this image has."
     )
 
     add(".SS Base toolchain")
@@ -359,31 +352,21 @@ def main():
     add(".SS Homebrew casks")
     add(joined(casks))
 
-    add(".SS Commands run after the installs")
-    if commands:
-        add(".nf")
-        for command in commands:
-            add(roff(command))
-        add(".fi")
-    else:
-        add("None.")
-
     add(".SH CHANGING WHAT IS INSTALLED")
     add(
-        "config.toml lives on the Mac, in the apple\\-container\\-sandbox checkout, "
-        "not in the sandbox. Add a package to it and run sandbox <name> again: the "
-        "image rebuilds, the container is recreated on it, and the home carries "
-        "over. This page is written by that build."
+        "The image is published to ghcr.io/brhelwig/apple\\-container\\-sandbox "
+        "by the repository's CI, which rebuilds it on every change and weekly. "
+        "The package lists are in image/Dockerfile, as the APT_PACKAGES, "
+        "BREW_TAPS, BREW_FORMULAE and BREW_CASKS build arguments. Change one of "
+        "those, merge, and the next launch pulls the rebuilt image. This page is "
+        "written by that build."
     )
     add(".PP")
     add(
-        "The base set every sandbox gets is in image/Dockerfile, next to it, as "
-        "the APT_PACKAGES, BREW_TAPS, BREW_FORMULAE and BREW_CASKS build "
-        "arguments. Change one of those and every sandbox on that Mac gets the "
-        "change."
+        "Runtime settings come from config.toml on the Mac, which the launcher "
+        "copies to ~/.sandbox\\-config.toml. The baked defaults are at "
+        "/etc/sandbox\\-config.toml."
     )
-    add(".PP")
-    add("The config this image was built from is at /etc/sandbox\\-config.toml.")
 
     add(".SH SECURITY")
     add(
@@ -407,8 +390,11 @@ def main():
 
     add(".SH FILES")
     add(".TP")
+    add("~/.sandbox\\-config.toml")
+    add("The runtime config, copied from config.toml on the Mac at launch.")
+    add(".TP")
     add("/etc/sandbox\\-config.toml")
-    add("The config this image was built from.")
+    add("The runtime defaults baked into the image.")
     add(".TP")
     add("~/.sandbox\\-code.log")
     add("The VS Code tunnel log.")

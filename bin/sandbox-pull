@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+. "$REPO/bin/lib.sh"
+
+IMAGE="$(sandbox_image_ref)"
+
+if ! container image pull "$IMAGE" >&2; then
+    if container image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo "Pull of $IMAGE failed; launching on the local copy." >&2
+    else
+        echo "Pull of $IMAGE failed, and there is no local copy." >&2
+        exit 1
+    fi
+fi
+
+echo "$IMAGE"

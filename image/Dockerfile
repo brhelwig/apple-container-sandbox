@@ -1,8 +1,5 @@
 FROM debian:bookworm
 
-ARG USERNAME=dev
-ARG USER_UID=1000
-
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8
@@ -52,13 +49,13 @@ RUN case "$(dpkg --print-architecture)" in \
     && rm -f /tmp/vscode-cli.tar.gz \
     && /usr/local/bin/code --version
 
-RUN useradd --uid $USER_UID --create-home --shell /usr/bin/zsh $USERNAME \
-    && echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME \
-    && chown -R $USERNAME:$USERNAME "/home/$USERNAME"
+RUN useradd --uid 1000 --create-home --shell /usr/bin/zsh dev \
+    && echo "dev ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/dev \
+    && chmod 0440 /etc/sudoers.d/dev \
+    && chown -R dev:dev /home/dev
 
-USER $USERNAME
-ENV HOME=/home/$USERNAME SHELL=/usr/bin/zsh
+USER dev
+ENV HOME=/home/dev SHELL=/usr/bin/zsh
 WORKDIR $HOME
 
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
@@ -87,37 +84,8 @@ RUN HOME=/etc/skel RUNZSH=no CHSH=no \
         sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
     && printf 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"\n' | tee -a /etc/skel/.zshrc /etc/skel/.bashrc \
     && printf '\n[ -r /etc/sandbox-prompt.zsh ] && source /etc/sandbox-prompt.zsh\n' >> /etc/skel/.zshrc \
-    && chown -R $USERNAME:$USERNAME /etc/skel
+    && chown -R dev:dev /etc/skel
 
-COPY config.toml /tmp/config.toml
-RUN pkgs="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("apt",{}).get("packages",[])))')" \
-    && if [ -n "$pkgs" ]; then apt-get update \
-       && apt-get install -y --no-install-recommends $pkgs \
-       && rm -rf /var/lib/apt/lists/*; fi
-
-USER $USERNAME
-RUN taps="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("taps",[])))')" \
-    && for t in $taps; do brew tap "$t" && { brew trust "$t" || true; }; done
-
-RUN formulae="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("formulae",[])))')" \
-    && if [ -n "$formulae" ]; then brew install $formulae; fi
-
-RUN casks="$(python3 -c 'import tomllib;print(" ".join(tomllib.load(open("/tmp/config.toml","rb")).get("brew",{}).get("casks",[])))')" \
-    && for c in $casks; do \
-         out="$(brew install --cask "$c" 2>&1)" && rc=0 || rc=$?; \
-         printf '%s\n' "$out"; \
-         [ "$rc" -eq 0 ] && continue; \
-         if brew list --cask "$c" >/dev/null 2>&1 || printf '%s' "$out" | grep -q 'Linking Binary'; then \
-           echo "note: cask $c installed (tolerating exit $rc)"; \
-         else \
-           echo "ERROR: cask $c failed to install" >&2; exit 1; \
-         fi; \
-       done
-
-RUN python3 -c 'import tomllib;[print(c) for c in tomllib.load(open("/tmp/config.toml","rb")).get("post_install",{}).get("commands",[])]' > /tmp/post_install.sh \
-    && set -e && while IFS= read -r cmd; do [ -n "$cmd" ] && bash -lc "$cmd"; done < /tmp/post_install.sh
-
-USER root
 COPY image/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY image/setup.sh /usr/local/bin/sandbox-setup
 COPY image/sandbox-zellij /usr/local/bin/sandbox-zellij
@@ -132,7 +100,7 @@ COPY image/sandbox-kubeconfig /usr/local/bin/sandbox-kubeconfig
 COPY image/sandbox-prompt.zsh /etc/sandbox-prompt.zsh
 COPY image/sandbox-nice.sh /etc/sandbox-nice.sh
 COPY image/sandbox-config.sh /etc/sandbox-config.sh
-COPY config.toml /etc/sandbox-config.toml
+COPY config.toml.example /etc/sandbox-config.toml
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/sandbox-setup \
         /usr/local/bin/sandbox-zellij /usr/local/bin/sandbox-idle \
         /usr/local/bin/sandbox-k3s /usr/local/bin/sandbox-code \
@@ -154,10 +122,10 @@ RUN install -d /usr/local/share/man/man7 \
 
 RUN printf '\n[ -r /etc/sandbox-nice.sh ] && . /etc/sandbox-nice.sh\n' >> /etc/zsh/zshenv
 
-RUN install -d -o $USERNAME -g $USERNAME /var/lib/sandbox /var/lib/sandbox/kube
+RUN install -d -o dev -g dev /var/lib/sandbox /var/lib/sandbox/kube
 ENV KUBECONFIG=/var/lib/sandbox/kube/config:/var/lib/sandbox/kube/k3s.yaml
 
-USER $USERNAME
+USER dev
 WORKDIR $HOME
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/usr/local/bin/sandbox-zellij"]

@@ -4,6 +4,7 @@ on:
   push:
   schedule:
     - cron: '0 7 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,7 +28,7 @@ jobs:
           curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.aarch64.tar.xz" \
             | tar -xJ --strip-components=1 -C /usr/local/bin "shellcheck-$SHELLCHECK_VERSION/shellcheck"
           shellcheck -x --severity=warning --shell=bash --exclude=SC1090 \
-            bin/lib.sh bin/sandbox bin/sandbox-build bin/sandbox-src-hash \
+            bin/lib.sh bin/sandbox bin/sandbox-pull \
             install.sh image/entrypoint.sh image/setup.sh image/sandbox-k3s \
             image/sandbox-code image/sandbox-idle image/sandbox-welcome \
             image/sandbox-kubeconfig image/sandbox-ssh
@@ -53,9 +54,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-
-      - name: Seed config.toml
-        run: cp config.toml.example config.toml
 
       - uses: docker/setup-buildx-action@v4
 
@@ -163,3 +161,98 @@ jobs:
           echo "docker stop returned in ${elapsed}s"
           [ "$elapsed" -lt 5 ]
           docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'sandbox-idle'
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test, image]
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Platform slug
+        run: |
+          slug="${{ matrix.platform }}"
+          echo "PLATFORM_SLUG=${slug//\//-}" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: image/Dockerfile
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,scope=${{ env.PLATFORM_SLUG }}
+          no-cache: ${{ github.event_name == 'schedule' }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ env.PLATFORM_SLUG }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+
+      - name: Push the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+
+      - name: Inspect the published image
+        run: docker buildx imagetools inspect ghcr.io/${{ github.repository }}:latest

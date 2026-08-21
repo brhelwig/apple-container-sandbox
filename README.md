@@ -2,7 +2,10 @@
 
 Ad-hoc Linux sandboxes on [Apple Container](https://github.com/apple/container).
 Each sandbox is a persistent home dir, container, and zellij session keyed by a
-single `<name>`, all sharing one image built from `image/Dockerfile`.
+single `<name>`, all sharing one prebuilt image,
+`ghcr.io/brhelwig/apple-container-sandbox`. CI builds it from
+`image/Dockerfile` for both amd64 and arm64, on every change and weekly, so a
+launch pulls the image instead of building it on your Mac.
 
 ## Install
 
@@ -28,9 +31,11 @@ sandbox --help
 ```
 
 Launching a sandbox that already runs attaches a shell to it and leaves it
-running, so background work inside it survives. Where the image changed since
-that sandbox started, `sandbox` says so and asks before it restarts the sandbox
-on the new image. Decline, and it attaches to what is already running.
+running, so background work inside it survives. Every launch pulls the
+published image, so a weekly rebuild or a merged change reaches you on the next
+launch. Where the image changed since that sandbox started, `sandbox` says so
+and asks before it restarts the sandbox on the new image. Decline, and it
+attaches to what is already running.
 
 Deleting removes the container and nothing else. The home dir at
 `~/Sandboxes/<name>` keeps every file in it, so the sandbox stays in the menu
@@ -121,24 +126,14 @@ tracked **`config.toml.example`**. Start from the template (this is exactly what
 cp config.toml.example config.toml
 ```
 
-Keeping it untracked means editing it never conflicts with `git pull`. Editing
-`config.toml` (or anything in `image/`) changes the image's source hash, so the
-next `sandbox <name>` rebuilds the image and recreates the sandbox on it.
+Keeping it untracked means editing it never conflicts with `git pull`. The
+config holds runtime settings only — the tools in the image are fixed by the
+published build (see
+[What's in the base image](#whats-in-the-base-image)). The launcher reads it on
+the Mac and copies it into the sandbox home as `~/.sandbox-config.toml`, so the
+sandbox's own launch hooks read the same settings.
 
 ```toml
-[apt]
-packages = ["ripgrep"]                # Debian packages (apt-native, arm64)
-
-[brew]
-taps     = ["hashicorp/tap"]          # taps are tapped AND trusted (so tap casks install)
-formulae = ["ripgrep-all"]            # linuxbrew formulae
-casks    = ["ngrok"]                  # Homebrew casks that ship a Linux build
-
-[post_install]
-commands = [                          # shell run at build time as the sandbox user (+ sudo)
-  "gcloud components install gke-gcloud-auth-plugin --quiet",
-]
-
 [resources]
 memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
 cpus   = 4                            # container CPU count; omit for the platform default
@@ -154,22 +149,9 @@ disk      = "8G"                      # sparse ext4 image holding cluster state
 node_ip   = "10.99.0.1"               # fixed node address; must not collide with your LAN
 ```
 
-- **These sections add to the base set, they don't replace it.** Every sandbox
-  installs the same tools no matter what is in here — `gh`, `node`, gcloud,
-  terraform, `cloudflared` and the rest, listed under
-  [What's in the base image](#whats-in-the-base-image). `config.toml` is for what
-  you want on top of that.
-- Prefer **apt** for stable, arch-native packages; **brew formulae** for current
-  dev tooling; **casks** for prebuilt binaries (they must have a Linux build).
-- A tap-provided formula/cask uses its fully-qualified name (e.g.
-  `hashicorp/tap/terraform`) once its tap is listed in `taps`.
-- `[post_install]` is for anything that isn't a package — component installs,
-  downloading a binary or AppImage, etc. It runs after all installs and **fails
-  the build** on error.
 - `[resources]` sets each sandbox's memory and CPU (passed to `container run`).
-  Omit a value to use Apple Container's default (~1 GiB memory). Changing these
-  rebuilds the image on next launch, so the new limits take effect on a fresh
-  container.
+  Omit a value to use Apple Container's default (~1 GiB memory). New limits take
+  effect the next time the container is recreated.
 - `[ssh]` decides whether every sandbox serves SSH, which port each one gets,
   and which address of the Mac that port is open on — see [SSH](#ssh) below.
 - `[k3s]` sizes and addresses the cluster, and `autostart` decides whether it
@@ -268,8 +250,8 @@ itself, or `[ssh].enabled = false` to turn the server off. See
 [Security scope](#security-scope).
 
 ```sh
-ssh -p 2222 you@127.0.0.1      # from the Mac
-ssh -p 2222 you@my-mac         # from a tailnet, LAN, or anywhere else
+ssh -p 2222 dev@127.0.0.1      # from the Mac
+ssh -p 2222 dev@my-mac         # from a tailnet, LAN, or anywhere else
 ```
 
 **The host key survives the container.** It lives in `~/.sandbox-ssh`, in the
@@ -324,15 +306,18 @@ A few consequences worth knowing:
 
 ## What's in the base image
 
-Every sandbox runs the same image, built from `image/Dockerfile`:
+Every sandbox runs the same image, `ghcr.io/brhelwig/apple-container-sandbox`.
+CI builds it from `image/Dockerfile` for linux/amd64 and linux/arm64, publishes
+it on every change to `main`, and rebuilds it weekly so the unpinned tools stay
+current:
 
-- **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
+- **Debian bookworm** with a base toolchain: `build-essential`,
   `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
   `man-db` (reads `man sandbox`), `openssh-server` (serves [SSH](#ssh)),
   `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
 - **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
   mount).
-- A **non-root user** (UID matched to your host for bind-mount ownership) with
+- The **non-root user `dev`** (UID 1000, the same in every sandbox) with
   passwordless `sudo`, `zsh` + oh-my-zsh, and a `📦 <name>` prompt showing the
   sandbox name.
 - **podman** wired for rootful use via a `sudo podman` shim.
@@ -344,10 +329,10 @@ Every sandbox runs the same image, built from `image/Dockerfile`:
 
 The tools every sandbox gets (`gh`, `node`, gcloud, terraform, `cloudflared`, …)
 are build arguments in the same file: `APT_PACKAGES`, `BREW_TAPS`,
-`BREW_FORMULAE` and `BREW_CASKS`. Edit a list there and the next
-`sandbox <name>` rebuilds the image with it, for every sandbox on that Mac.
-`config.toml` adds to these lists per machine — it never takes anything out of
-them.
+`BREW_FORMULAE` and `BREW_CASKS`. To add a tool, edit a list there and merge:
+CI publishes the rebuilt image, and the next `sandbox <name>` pulls it. To try
+a change before it merges, build locally and point the launcher at your build
+with `IMAGE=<ref> sandbox <name>`.
 
 ## Security scope
 
@@ -406,7 +391,10 @@ bash test/run.sh
 ```
 
 Every push also runs these on GitHub Actions, alongside ShellCheck, hadolint,
-and a Docker build of `image/Dockerfile` — the build that catches a tap,
-formula, or cask breaking. Launching a real sandbox
+and a Docker build of `image/Dockerfile` with smoke tests — the build that
+catches a tap, formula, or cask breaking. On `main`, and on the weekly
+schedule, CI then builds the image for linux/amd64 and linux/arm64 on native
+runners and publishes the multi-arch manifest to
+`ghcr.io/brhelwig/apple-container-sandbox`. Launching a real sandbox
 isn't covered: Apple Container needs the Virtualization framework, which hosted
 runners can't provide.

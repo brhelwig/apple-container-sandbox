@@ -12,7 +12,6 @@ Cluster state lives on a sparse ext4 image in $HOME, loop-mounted at
 EOF
 }
 
-CONFIG="${SANDBOX_K3S_CONFIG:-/etc/sandbox-config.toml}"
 STATE_DIR=/var/lib/rancher
 LOG=/var/log/k3s.log
 BRIDGE=br-k3s
@@ -28,6 +27,12 @@ sandbox_home() {
     home="$(getent passwd "$user" | cut -d: -f6)"
     printf '%s\n' "${home:-$HOME}"
 }
+
+CONFIG="${SANDBOX_K3S_CONFIG:-}"
+if [ -z "$CONFIG" ]; then
+    CONFIG="$(sandbox_home)/.sandbox-config.toml"
+    [ -r "$CONFIG" ] || CONFIG=/etc/sandbox-config.toml
+fi
 
 disk_img()  { printf '%s/.sandbox-k3s.img\n' "$(sandbox_home)"; }
 running()   { pgrep -f "$K3S_PATTERN" >/dev/null 2>&1; }
