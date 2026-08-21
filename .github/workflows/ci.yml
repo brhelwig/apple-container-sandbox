@@ -100,7 +100,7 @@ jobs:
             '[ "$(nice)" = 10 ] && [ "$(cat /proc/self/oom_score_adj)" = 1000 ]'
           docker run --rm --entrypoint zsh "$IMAGE" -c \
             '[ "$(nice)" = 0 ] && [ "$(cat /proc/self/oom_score_adj)" = 0 ]'
-          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'COMMANDS RUN BY CLAUDE'
+          docker run --rm --entrypoint man "$IMAGE" 7 sandbox | grep -q 'BACKGROUND WORK'
           docker run --rm --entrypoint sandbox-background "$IMAGE" sh -c \
             '[ "$(nice)" = 10 ] && [ "$(cat /proc/self/oom_score_adj)" = 1000 ]'
 
