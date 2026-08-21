@@ -4,8 +4,6 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "$REPO/bin/lib.sh"
 
-USERNAME="${SANDBOX_USER:-${USER:-dev}}"
-
 usage() {
     cat <<EOF
 sandbox — ad-hoc Linux sandboxes on Apple Container
@@ -22,7 +20,7 @@ time with \`sandbox <name>\`, and stop it from the menu or with
 \`container stop <name>\`.
 
 Every sandbox also serves SSH, on a port of the Mac that is its own, so
-\`ssh -p <port> $USERNAME@<the Mac>\` reaches it from anywhere that can reach the
+\`ssh -p <port> dev@<the Mac>\` reaches it from anywhere that can reach the
 Mac, a tailnet included. The port is kept in ~/Sandboxes/<name>/.sandbox-ssh-port
 and stays the same across launches. Only a key gets in; there is no password.
 
@@ -45,7 +43,7 @@ run_container() {
 
     container run --rm \
         --name "$name" \
-        --volume "$home:/home/$USERNAME" \
+        --volume "$home:/home/dev" \
         ${resource_args[@]+"${resource_args[@]}"} \
         --cap-add ALL \
         --init \
@@ -78,10 +76,14 @@ attach() {
 }
 
 launch() {
-    local name="$1" headless="${2:-0}" ssh_port="${3:-}" home image running_image
+    local name="$1" headless="${2:-0}" ssh_port="${3:-}" home image digest recorded running_image
     local -a ssh_args=()
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
+
+    if [ -f "$REPO/config.toml" ]; then
+        cp "$REPO/config.toml" "$home/.sandbox-config.toml"
+    fi
 
     if [ -n "$ssh_port" ]; then
         sandbox_set_ssh_port "$name" "$ssh_port"
@@ -98,12 +100,16 @@ launch() {
         echo "'$name' is already running; port $ssh_port serves it once it next starts."
     fi
 
+    image="$(bash "$REPO/bin/sandbox-pull" | tail -1)"
+    digest="$(sandbox_image_digest "$image")"
+
     if [ -n "$running_image" ]; then
-        if [ "$running_image" = "$(sandbox_image_ref "$("$REPO/bin/sandbox-src-hash")")" ]; then
+        recorded="$(cat "$home/.sandbox-image-digest" 2>/dev/null || true)"
+        if [ -z "$digest" ] || [ "$digest" = "$recorded" ]; then
             attach "$name" "$headless"
             return
         fi
-        echo "'$name' is running on $running_image, and the image has changed since." >&2
+        echo "'$name' is running, and the image has changed since it started." >&2
         if ! confirm "Restart '$name' on the new image? Everything running inside it is lost."; then
             attach "$name" "$headless"
             return
@@ -113,7 +119,9 @@ launch() {
 
     container delete --force "$name" >/dev/null 2>&1 || true
 
-    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
+    if [ -n "$digest" ]; then
+        printf '%s\n' "$digest" > "$home/.sandbox-image-digest"
+    fi
 
     if [ "$headless" = 1 ]; then
         run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} --detach "$image" \

@@ -15,7 +15,36 @@ sandbox_home_path() {
 }
 
 sandbox_image_ref() {
-    printf '%s\n' "${IMAGE:-sandbox:$1}"
+    printf '%s\n' "${IMAGE:-ghcr.io/brhelwig/apple-container-sandbox:latest}"
+}
+
+sandbox_image_digest() {
+    container image inspect "$1" 2>/dev/null | python3 -c '
+import json, sys
+
+def find(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "digest" and isinstance(value, str) and value.startswith("sha256:"):
+                return value
+            found = find(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for value in node:
+            found = find(value)
+            if found:
+                return found
+    return None
+
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+digest = find(data)
+if digest:
+    print(digest)
+' 2>/dev/null || true
 }
 
 sandbox_resource_args() {
@@ -142,10 +171,6 @@ ensure_gum() {
     fi
     echo "Or skip the menu and name the sandbox: sandbox <name>" >&2
     return 1
-}
-
-rosetta_bootstrap_failure() {
-    grep -q 'Rosetta is not installed' "$1"
 }
 
 list_sandboxes() {

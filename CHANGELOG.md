@@ -4,6 +4,34 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 
 ## Unreleased
 
+### Changed
+- The image is prebuilt and published to
+  `ghcr.io/brhelwig/apple-container-sandbox` instead of being built on each
+  Mac. CI builds it from `image/Dockerfile` for linux/amd64 and linux/arm64 on
+  native runners, on every change to `main` and weekly, and pushes a
+  multi-arch manifest tagged `latest`. The launcher pulls that image on every
+  launch (`bin/sandbox-pull`, which replaces `bin/sandbox-build`), records the
+  image digest per sandbox in `~/Sandboxes/<name>/.sandbox-image-digest`, and
+  keeps the confirm-before-restart flow when a running sandbox is on an older
+  digest. A failed pull falls back to the local copy of the image, so a
+  sandbox still launches offline. `IMAGE=<ref> sandbox <name>` still overrides
+  the image.
+- The container user is `dev` (UID 1000) in every sandbox; it no longer
+  mirrors the Mac username.
+- `config.toml` holds runtime settings only (`[resources]`, `[ssh]`, `[k3s]`).
+  The launcher copies it into the sandbox home as `~/.sandbox-config.toml`,
+  and the launch hooks read that copy, falling back to the defaults baked into
+  the image at `/etc/sandbox-config.toml`.
+
+### Removed
+- The `[apt]`, `[brew]`, and `[post_install]` build-time addon sections of
+  `config.toml`. Add a tool by editing the package lists in `image/Dockerfile`
+  and merging; CI publishes the rebuilt image.
+- `bin/sandbox-src-hash` and the source-hash image tags — the published
+  image's digest identifies it now.
+- The Rosetta bootstrap prompt in the build path; nothing builds amd64 layers
+  on the Mac anymore.
+
 ### Added
 - Every sandbox serves SSH. `openssh-server` joins the base toolchain, and
   `sandbox-ssh up|down|status` runs it; the launch starts it, next to the VS
