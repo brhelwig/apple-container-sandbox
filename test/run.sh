@@ -260,6 +260,9 @@ formulae = ["jq"]
 casks = ["tflint"]
 [post_install]
 commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
+[resources]
+memory = "4G"
+cpus = 4
 [k3s]
 disk = "8G"
 TOML
@@ -276,6 +279,11 @@ ok 'grep -q "config.toml" "$MOUT"'                      'sandbox-manpage: says w
 ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the base lists'
 ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
 ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
+ok 'grep -q "enter the code it prints" "$MOUT"'         'sandbox-manpage: gives the tunnel sign-in steps'
+ok 'grep -qF "sandbox\\-code status" "$MOUT"'           'sandbox-manpage: says how to get the tunnel link'
+ok 'grep -qF "use\\-context k3s" "$MOUT"'               'sandbox-manpage: says how to select the cluster context'
+ok 'grep -qF "Ctrl\\-o" "$MOUT"'                        'sandbox-manpage: says how to detach the session'
+ok 'grep -q "^4G$" "$MOUT"'                             'sandbox-manpage: reports the memory limit'
 
 no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
 
