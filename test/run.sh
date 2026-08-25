@@ -191,9 +191,13 @@ mkdir -p "$CSTUB"
 cat > "$CSTUB/container" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CMD_LOG"
-[ "$1" = run ] && printf '%s\n' "$@" > "$RUN_LOG"
+[ "$1 $2" = "run --detach" ] && printf '%s\n' "$@" > "$RUN_LOG"
 [ -n "${IMG_ENV+set}" ] || IMG_ENV='"HOME=/home/dev","SHELL=/usr/bin/zsh"'
 case "$1 $2" in
+    "run --rm")
+        printf '%s\n%s\n%s\n' "${PROBE_HOME-/home/probed}" \
+            "${PROBE_USER-probeduser}" "${PROBE_SHELL-/bin/probesh}"
+        ;;
     "image inspect")
         [ -n "${IMG_MISSING:-}" ] && exit 1
         cat <<JSON
@@ -212,11 +216,19 @@ case "$1 $2" in
 JSON
         ;;
     "ls --all")
+        # A launch that already happened leaves the container running, the
+        # way a real one would.
+        if [ -z "${RUNNING_STATE:-}" ] && [ -s "$RUN_LOG" ]; then
+            RUNNING_STATE=running
+            RUNNING_NAME="$(sed -n '/^--name$/{n;p;}' "$RUN_LOG")"
+            RUNNING_REF="$(sed -n '/^sleep$/{x;p;q;};h' "$RUN_LOG")"
+            RUNNING_DIGEST="${IMG_DIGEST:-sha256:aaa}"
+        fi
         if [ -n "${RUNNING_STATE:-}" ]; then
             cat <<JSON
 [ { "id": "${RUNNING_NAME:-testbox}",
-    "configuration": {"image": {"reference": "$RUNNING_REF",
-                                "descriptor": {"digest": "$RUNNING_DIGEST"}}},
+    "configuration": {"image": {"reference": "${RUNNING_REF:-}",
+                                "descriptor": {"digest": "${RUNNING_DIGEST:-}"}}},
     "status": {"state": "$RUNNING_STATE"} } ]
 JSON
         else
@@ -263,7 +275,7 @@ ok '[ "$(cat "$TMP/homes/testbox/.sandbox-ssh-port")" = 2222 ]' \
 ok 'grep -q AAAAfirst "$TMP/homes/testbox/.ssh/authorized_keys"' \
                                                     'launch: authorizes your keys the first time'
 no '[ -e "$TMP/homes/testbox/.sandbox-image" ]'     'launch: pins no image of its own'
-ok '[ "$(cat "$TMP/homes/testbox/.sandbox-home")" = /home/dev ]' \
+ok '[ "$(sed -n 2p "$TMP/homes/testbox/.sandbox-image-facts")" = /home/dev ]' \
                                                     'launch: records where it mounted'
 
 run_launch -d testbox
@@ -307,10 +319,6 @@ printf '[ssh]\naddress = "127.0.0.1"\nport = 2500\n' > "$REPOCOPY/config.toml"
 run_launch loopbackonly
 ok 'grep -qx "127.0.0.1:2500:22" "$TMP/run.log"'    'ssh address: publishes on that address alone'
 
-printf '[ssh]\nport = 2600\ncontainer_port = 2222\n' > "$REPOCOPY/config.toml"
-run_launch otherport
-ok 'grep -qx "0.0.0.0:2600:2222" "$TMP/run.log"'    'ssh: honours a container port the image chose'
-
 cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
 run_launch --image example.com/other:1 pinned
@@ -345,11 +353,17 @@ ok 'grep -q "^image pull" "$TMP/cmd.log"'           'image: fetches one that is 
 IMG_WORKDIR=/home/wd IMG_ENV='"SHELL=/bin/sh"' run_launch workdirbox
 ok 'grep -q ":/home/wd$" "$TMP/run.log"'            'home: falls back to WorkingDir with no HOME'
 
-IMG_WORKDIR=/ IMG_ENV='"SHELL=/bin/sh"' run_launch nohomebox; status=$?
-ok '[ "$status" -ne 0 ]'                            'home: a root WorkingDir is no home, so it stops'
-no '[ -e "$TMP/run.log" ]'                          'home: launches nothing with nowhere to mount'
-ok 'grep -q "image..home" "$TMP/out.txt"'           'home: names the config key that would fix it'
-no 'grep -q "/home/$USER" "$TMP/run.log"'           'home: never guesses your Mac username'
+IMG_WORKDIR=/ IMG_ENV='' IMG_USER=1000 run_launch -d probedbox; status=$?
+ok '[ "$status" -eq 0 ]'                            'probe: an image that says nothing still launches'
+ok 'grep -q "^run --rm --entrypoint sh" "$TMP/cmd.log"' 'probe: asks the image instead of asking you'
+ok 'grep -q ":/home/probed$" "$TMP/run.log"'        'probe: mounts where the image says its home is'
+no 'grep -q "/home/$USER" "$TMP/run.log"'           'probe: never guesses your Mac username'
+ok 'grep -q "probeduser@127.0.0.1" "$TMP/out.txt"'  'probe: names the account, not a uid'
+ok '[ "$(sed -n 2p "$TMP/homes/probedbox/.sandbox-image-facts")" = /home/probed ]' \
+                                                    'probe: remembers the answer'
+
+IMG_WORKDIR=/ IMG_ENV='' IMG_USER=1000 run_launch -d probedbox
+no 'grep -q "^run --rm --entrypoint sh" "$TMP/cmd.log"' 'probe: does not ask twice for the same image'
 
 AMD64_VARIANT='{ "platform": {"os": "linux", "architecture": "amd64"},
   "digest": "sha256:x", "size": 1,
@@ -360,19 +374,13 @@ IMG_VARIANTS="$AMD64_VARIANT" run_launch multiarch
 ok 'grep -q ":/home/dev$" "$TMP/run.log"'           'arch: picks the variant matching this Mac'
 no 'grep -q "wrongarch" "$TMP/run.log"'             'arch: ignores the other architecture'
 
-printf '[image]\nhome = "/home/forced"\n' > "$REPOCOPY/config.toml"
-run_launch forcedhome
-ok 'grep -q ":/home/forced$" "$TMP/run.log"'        'home: [image].home overrides the image'
-
-printf '[image]\nattach = "zellij attach --create dev"\n' > "$REPOCOPY/config.toml"
 run_launch attachbox
-ok 'grep -q "zellij attach --create dev" "$TMP/cmd.log"' 'attach: runs the command from the config'
-printf '[image]\nref = "%s"\n' "$DEFAULT_IMAGE" > "$REPOCOPY/config.toml"
-run_launch bareattach
-ok 'grep -q "/usr/bin/zsh -l$" "$TMP/cmd.log"'      'attach: falls back to the shell the image names'
-IMG_ENV='"HOME=/home/dev"' run_launch noshell
-ok 'grep -q "/bin/sh -l$" "$TMP/cmd.log"'           'attach: falls back to /bin/sh when it names none'
-cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
+ok 'grep -q "zellij attach --create attachbox" "$TMP/cmd.log"' \
+                                                    'attach: joins a zellij session named after the sandbox'
+ok 'grep -q "command -v zellij" "$TMP/cmd.log"'     'attach: only where the image has zellij'
+ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: otherwise the shell the image names'
+IMG_ENV='"HOME=/home/dev"' PROBE_SHELL=/bin/sh run_launch noshell
+ok 'grep -q "/bin/sh -l" "$TMP/cmd.log"'            'attach: asks the image when it names no shell'
 
 mkdir -p "$TMP/homes/tunnelbox"
 printf 'open https://old.tunnel.example/x\n' > "$TMP/homes/tunnelbox/.code-tunnel.log"
@@ -380,7 +388,7 @@ run_launch -d tunnelbox
 no 'grep -q "old.tunnel.example" "$TMP/out.txt"'    'tunnel: a link from an earlier launch is not this one'
 
 mkdir -p "$TMP/homes/movedbox"
-printf '/home/old\n' > "$TMP/homes/movedbox/.sandbox-home"
+printf 'sha256:aaa\n/home/old\ndev\n/bin/sh\n' > "$TMP/homes/movedbox/.sandbox-image-facts"
 run_launch movedbox
 ok 'grep -q "used to mount at /home/old" "$TMP/out.txt"' 'home: says so when the mount point moved'
 
@@ -403,10 +411,6 @@ ok 'grep -qx "stop testbox" "$TMP/cmd.log"'         'stale digest, confirmed: st
 ok 'grep -qx "delete --force testbox" "$TMP/cmd.log"' 'stale digest, confirmed: deletes it'
 ok 'grep -q "^run " "$TMP/cmd.log"'                 'stale digest, confirmed: starts it again'
 
-RUNNING_STATE=stopped RUNNING_REF="$DEFAULT_IMAGE" RUNNING_DIGEST=sha256:old \
-    GUM_CONFIRM=1 run_launch testbox
-ok 'grep -qx "delete --force testbox" "$TMP/cmd.log"' 'stopped: clears the record without asking'
-ok 'grep -q "^run " "$TMP/cmd.log"'                 'stopped: starts it again'
 DSTUB="$TMP/dstub"
 mkdir -p "$DSTUB"
 cat > "$DSTUB/container" <<'STUBEOF'

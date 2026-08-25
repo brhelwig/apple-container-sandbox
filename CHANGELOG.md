@@ -10,11 +10,17 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   every sandbox, and `sandbox --image <ref> <name>` pins one sandbox to a ref of
   its own, recorded in `~/Sandboxes/<name>/.sandbox-image`. Delete that file to
   follow the config again.
-- The launcher reads the image rather than assuming things about it. The home it
-  mounts over, the account SSH names, and the shell it attaches all come out of
-  the image's OCI config, so the mount target is no longer assumed to be
-  `/home/$USER`. An image that declares no home stops the launch with the config
-  key that would fix it, rather than guessing.
+- The launcher asks the image rather than assuming things about it, or asking
+  you. The home it mounts over, the account SSH names, and the shell it attaches
+  come from the image's OCI config, and for an image that declares none of them
+  it starts the image once with the entrypoint bypassed and asks. So the mount
+  target is never assumed to be `/home/$USER`, and `sandbox --image
+  debian:bookworm plain` works with no configuration at all. The answer is
+  remembered per sandbox in `.sandbox-image-facts`.
+- Attaching joins a zellij session named after the sandbox where the image has
+  zellij, and drops into the image's login shell where it does not.
+- `[image].ref` is the only image setting. Everything else about an image comes
+  from the image.
 - **A sandbox no longer stops when you leave its shell.** Every launch is
   detached and attaching is a separate `container exec`, so background work
   survives leaving the shell rather than only surviving a headless launch. Stop
@@ -26,8 +32,6 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   command inside the sandbox, and read the VS Code tunnel link only from what the
   current launch wrote, so a link from an earlier launch is never reported as
   this one.
-- `[ssh].container_port` sets the port sshd listens on inside the image, which
-  used to be hardcoded to 22.
 
 ### Removed
 - `image/` and everything in it: the Dockerfile, the entrypoint, and the

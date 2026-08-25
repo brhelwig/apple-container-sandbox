@@ -40,10 +40,11 @@ EOF
 
 IMAGE_REF="" IMAGE_HOME="" IMAGE_USER="" IMAGE_SHELL="" IMAGE_DIGEST=""
 
-# Fills the IMAGE_* globals from the image's own OCI config, so the mount
-# target and the login name come from the image rather than from this Mac.
+# Fills the IMAGE_* globals from the image itself, so the mount target, the
+# login name and the shell come from the image rather than from this Mac or
+# from something you had to write in a config file.
 resolve_image() {
-    local name="$1" pull="$2" configured_home lines
+    local name="$1" pull="$2" lines cached probed
     IMAGE_REF="$(sandbox_image_ref "$CONFIG" "$name")"
 
     if ! valid_image_ref "$IMAGE_REF"; then
@@ -70,24 +71,35 @@ resolve_image() {
     IMAGE_SHELL="$(printf '%s\n' "$lines" | sed -n 3p)"
     IMAGE_DIGEST="$(printf '%s\n' "$lines" | sed -n 5p)"
 
-    configured_home="$(sandbox_config "$CONFIG" image home "")"
-    [ -n "$configured_home" ] && IMAGE_HOME="$configured_home"
+    if [ -z "$IMAGE_HOME" ] || [ -z "$IMAGE_SHELL" ] || ! usable_name "$IMAGE_USER"; then
+        cached="$(sandbox_recorded_facts "$name")"
+        if [ "$(printf '%s\n' "$cached" | sed -n 1p)" = "$IMAGE_DIGEST" ]; then
+            probed="$(printf '%s\n' "$cached" | sed -n '2,4p')"
+        else
+            echo "Asking $IMAGE_REF where it keeps its home ..." >&2
+            probed="$(sandbox_probe_image "$IMAGE_REF")"
+        fi
+        [ -n "$IMAGE_HOME" ] || IMAGE_HOME="$(printf '%s\n' "$probed" | sed -n 1p)"
+        usable_name "$IMAGE_USER" || IMAGE_USER="$(printf '%s\n' "$probed" | sed -n 2p)"
+        [ -n "$IMAGE_SHELL" ] || IMAGE_SHELL="$(printf '%s\n' "$probed" | sed -n 3p)"
+    fi
 
     if [ -z "$IMAGE_HOME" ]; then
-        echo "$IMAGE_REF declares no home directory, so there is nowhere to" >&2
-        echo "mount '$name'. Name one with [image].home in config.toml." >&2
+        echo "$IMAGE_REF has no home directory to mount '$name' over." >&2
         return 1
     fi
 
     [ -n "$IMAGE_SHELL" ] || IMAGE_SHELL=/bin/sh
+    sandbox_set_facts "$name" "$IMAGE_DIGEST" "$IMAGE_HOME" "$IMAGE_USER" "$IMAGE_SHELL"
     return 0
 }
 
-# A numeric User is a uid, which names no account anyone can ssh to.
-login_name() {
-    case "$IMAGE_USER" in
-        ""|*[!a-zA-Z0-9._-]*|[0-9]*) printf 'the image user\n' ;;
-        *) printf '%s\n' "$IMAGE_USER" ;;
+# A uid names no account anyone can ssh to, so it is not a name we can use.
+usable_name() {
+    case "${1:-}" in
+        ""|*[!a-zA-Z0-9._-]*) return 1 ;;
+        *[!0-9]*)             return 0 ;;
+        *)                    return 1 ;;
     esac
 }
 
@@ -95,38 +107,42 @@ run_container() {
     local name="$1" home="$2"
     shift 2
 
-    local -a resource_args=() env_args=()
+    local -a resource_args=()
     while IFS= read -r line; do resource_args+=("$line"); done \
         < <(sandbox_resource_args "$CONFIG")
-    while IFS= read -r line; do env_args+=("$line"); done \
-        < <(sandbox_image_env_args "$CONFIG")
 
+    # An image whose entrypoint is tini warns unless it knows it is not PID 1.
     container run --detach --rm \
         --name "$name" \
         --volume "$home:$IMAGE_HOME" \
         ${resource_args[@]+"${resource_args[@]}"} \
-        ${env_args[@]+"${env_args[@]}"} \
+        --env TINI_SUBREAPER=1 \
         --cap-add ALL \
         --init \
         "$@"
 }
 
+running_now() {
+    [ "$(sandbox_running_image "$1" 2>/dev/null | sed -n 3p)" = "running" ]
+}
+
 # Nothing injects TERM, so without this zellij and vim draw on a dumb terminal.
+# zellij keeps the session alive between attaches; images without it get a
+# plain login shell.
 attach() {
-    local name="$1" attach_cmd
-    attach_cmd="$(sandbox_config "$CONFIG" image attach "")"
+    local name="$1"
 
-    if [ -n "$attach_cmd" ]; then
-        container exec --interactive --tty \
-            --env "TERM=${TERM:-xterm-256color}" \
-            "$name" "$IMAGE_SHELL" -lc "$attach_cmd" || true
+    container exec --interactive --tty \
+        --env "TERM=${TERM:-xterm-256color}" \
+        "$name" "$IMAGE_SHELL" -lc \
+        "command -v zellij >/dev/null 2>&1 && exec zellij attach --create $name; exec $IMAGE_SHELL -l" \
+        || true
+
+    if running_now "$name"; then
+        echo "'$name' is still running. Stop it from the menu, or with: container stop $name"
     else
-        container exec --interactive --tty \
-            --env "TERM=${TERM:-xterm-256color}" \
-            "$name" "$IMAGE_SHELL" -l || true
+        echo "'$name' is not running any more." >&2
     fi
-
-    echo "'$name' is still running. Stop it from the menu, or with: container stop $name"
 }
 
 report_ssh() {
@@ -139,15 +155,18 @@ report_ssh() {
         echo "     add one to $(sandbox_authorized_keys_path "$name")"
         return 0
     fi
-    echo "ssh: $count authorized key(s); ssh -p $port $(login_name)@127.0.0.1"
+    echo "ssh: $count authorized key(s); ssh -p $port $IMAGE_USER@127.0.0.1"
     echo "     the same port on the Mac's own address reaches it from elsewhere"
 }
 
+# The log the VS Code CLI writes, in the sandbox home. Absent in an image that
+# runs no tunnel, and then this reports nothing.
+TUNNEL_LOG=.code-tunnel.log
+
 report_tunnel() {
     local name="$1" offset="$2" log waited=0 url
-    log="$(sandbox_config "$CONFIG" image tunnel_log "")"
-    [ -n "$log" ] || return 0
-    log="$(sandbox_home_path "$name")/$log"
+    log="$(sandbox_home_path "$name")/$TUNNEL_LOG"
+    [ -e "$log" ] || return 0
 
     while [ "$waited" -lt "${SANDBOX_TUNNEL_WAIT:-30}" ]; do
         if url="$(sandbox_tunnel_url "$log" "$offset")"; then
@@ -161,28 +180,22 @@ report_tunnel() {
 }
 
 start_container() {
-    local name="$1" home="$2" hold
+    local name="$1" home="$2"
     local -a ssh_args=()
 
     if sandbox_ssh_enabled "$CONFIG"; then
         sandbox_seed_authorized_keys "$name"
-        ssh_args=(--publish "$(sandbox_ssh_address "$CONFIG"):$(sandbox_ssh_port "$CONFIG" "$name"):$(sandbox_config "$CONFIG" ssh container_port 22)")
+        ssh_args=(--publish "$(sandbox_ssh_address "$CONFIG"):$(sandbox_ssh_port "$CONFIG" "$name"):22")
     fi
 
-    # `sleep infinity` is a GNU extension; busybox images reject it.
-    hold="$(sandbox_config "$CONFIG" image hold 'sleep 2147483647')"
-
     echo "Launching '$name' on $IMAGE_REF ..." >&2
-    # shellcheck disable=SC2086
+    # `sleep infinity` is a GNU extension, so spell out a number busybox takes.
     run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} \
-        "$IMAGE_REF" $hold >/dev/null
-
-    sandbox_set_mount "$name" "$IMAGE_HOME"
+        "$IMAGE_REF" sleep 2147483647 >/dev/null
 }
 
 warn_moved_home() {
-    local name="$1" previous
-    previous="$(sandbox_recorded_mount "$name")"
+    local name="$1" previous="$2"
     [ -n "$previous" ] || return 0
     [ "$previous" != "$IMAGE_HOME" ] || return 0
     echo "'$name' used to mount at $previous and now mounts at $IMAGE_HOME." >&2
@@ -191,25 +204,29 @@ warn_moved_home() {
 
 launch() {
     local name="$1" headless="${2:-0}" ssh_port="${3:-}" image="${4:-}" pull="${5:-0}"
-    local home offset=0 running ref digest state tunnel_log
+    local home offset=0 running ref digest state was_home
 
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
 
-    if [ -n "$image" ]; then
-        if ! valid_image_ref "$image"; then
-            echo "Invalid image ref: '$image'." >&2
-            return 2
-        fi
-        sandbox_set_image "$name" "$image"
+    if [ -n "$image" ] && ! valid_image_ref "$image"; then
+        echo "Invalid image ref: '$image'." >&2
+        return 2
     fi
 
     if [ -n "$ssh_port" ]; then
         sandbox_set_ssh_port "$name" "$ssh_port"
     fi
 
-    resolve_image "$name" "$pull" || return 1
-    warn_moved_home "$name"
+    # resolve_image rewrites the facts, so read the old mount point first.
+    was_home="$(printf '%s\n' "$(sandbox_recorded_facts "$name")" | sed -n 2p)"
+
+    SANDBOX_IMAGE_OVERRIDE="$image" resolve_image "$name" "$pull" || return 1
+    warn_moved_home "$name" "$was_home"
+
+    # Only once the ref has proved itself, so a typo does not silently become
+    # the sandbox's permanent image.
+    [ -n "$image" ] && sandbox_set_image "$name" "$image"
 
     if running="$(sandbox_running_image "$name")"; then
         ref="$(printf '%s\n' "$running" | sed -n 1p)"
@@ -242,11 +259,8 @@ launch() {
 
     container delete --force "$name" >/dev/null 2>&1 || true
 
-    tunnel_log="$(sandbox_config "$CONFIG" image tunnel_log "")"
-    if [ -n "$tunnel_log" ]; then
-        offset="$(sandbox_file_size "$home/$tunnel_log")"
-        offset="${offset:-0}"
-    fi
+    offset="$(sandbox_file_size "$home/$TUNNEL_LOG")"
+    offset="${offset:-0}"
 
     start_container "$name" "$home"
 

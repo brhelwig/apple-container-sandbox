@@ -73,16 +73,15 @@ ref = "ghcr.io/you/img:tag"      # every sandbox that has no pin of its own
 
 With neither, sandboxes run `ghcr.io/brhelwig/dev-container:latest-arm64`.
 
-**The launcher reads the image rather than assuming things about it.** The home
-it mounts over, the account SSH tells you to log in as, and the shell it attaches
-come out of the image's own OCI config. An image that declares no home has
-nowhere to mount a sandbox, and `sandbox` says so and stops rather than guessing
-— name one with `[image].home` and it will run:
+**The launcher asks the image rather than asking you.** The home it mounts over,
+the account SSH tells you to log in as, and the shell it attaches all come from
+the image. It reads the image's OCI config first, and for an image that declares
+none of that — a plain `debian:bookworm`, say — it starts the image once with its
+entrypoint bypassed and asks. That takes about a second, and the answer is
+remembered per sandbox, so it happens once per image.
 
-```toml
-[image]
-ref  = "debian:bookworm"
-home = "/root"
+```sh
+sandbox --image debian:bookworm plain    # works with no configuration at all
 ```
 
 **Moving tags drift.** `latest-arm64` is rebuilt weekly, and nothing notices
@@ -105,7 +104,7 @@ container stop myproject   # stop it
 It reports SSH from the Mac's side — the port it published and how many keys
 would be accepted — so a sandbox with no authorized key says so rather than
 coming up silently with no way in. If the image writes a VS Code tunnel log into
-the home (`[image].tunnel_log`), the launcher watches it for up to 30 seconds and
+the home as `.code-tunnel.log`, the launcher watches it for up to 30 seconds and
 prints the link. It only reads what this launch wrote, so a link from last week
 is never reported as this one. Set `SANDBOX_TUNNEL_WAIT` to change that budget.
 
@@ -125,33 +124,21 @@ Keeping it untracked means editing it never conflicts with `git pull`.
 
 ```toml
 [image]
-ref        = "ghcr.io/brhelwig/dev-container:latest-arm64"
-attach     = "zellij attach --create dev"   # run on attach; omit for a login shell
-tunnel_log = ".code-tunnel.log"             # watched on a headless launch
-env        = ["TINI_SUBREAPER=1"]           # passed to `container run` as --env
-# home     = "/home/dev"                    # only if the image declares no HOME
-# hold     = "sleep 2147483647"             # only if the image has no GNU-style sleep
+ref = "ghcr.io/brhelwig/dev-container:latest-arm64"
 
 [resources]
 memory = "4G"                    # container memory (K/M/G/T/P); omit for the default
 cpus   = 4                       # container CPU count; omit for the default
 
 [ssh]
-enabled        = true            # serve SSH from every sandbox
-port           = 2222            # first port to hand out; each sandbox gets its own
-address        = "0.0.0.0"       # every address of the Mac; "127.0.0.1" for the Mac alone
-container_port = 22              # the port sshd listens on inside the image
+enabled = true                   # publish a port for every sandbox
+port    = 2222                   # first port to hand out; each sandbox gets its own
+address = "0.0.0.0"              # every address of the Mac; "127.0.0.1" for the Mac alone
 ```
 
-- `[image]` picks what every sandbox runs — see
-  [Choosing an image](#choosing-an-image).
-- `attach` runs through the image's own shell. Leave it out and `sandbox <name>`
-  drops you into a login shell instead. The default matches `dev-container`,
-  whose entrypoint creates a zellij session called `dev`.
-- `hold` is the process that holds the container open. It runs as the argument
-  to the image's entrypoint, so the image still starts everything it normally
-  does. `sleep infinity` is a GNU extension, so the default spells out a number
-  that busybox also accepts.
+- `[image].ref` picks what every sandbox runs — see
+  [Choosing an image](#choosing-an-image). It is the only image setting, because
+  everything else about an image comes from the image.
 - `[resources]` sets each sandbox's memory and CPU (passed to `container run`).
   Omit a value to use Apple Container's default (~1 GiB memory).
 - `[ssh]` decides whether every sandbox serves SSH, which port each one gets, and
@@ -205,7 +192,7 @@ code tunnel user login
 ```
 
 The launcher's part is only to report the link on a headless launch, which it
-reads out of the log named by `[image].tunnel_log`.
+reads out of `.code-tunnel.log` in the sandbox home.
 
 A running tunnel is a way into the sandbox from outside the machine — see
 [Security scope](#security-scope).

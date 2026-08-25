@@ -51,6 +51,10 @@ sandbox_set_image() {
 # every sandbox that never asked for one of its own.
 sandbox_image_ref() {
     local config="$1" name="$2" ref
+    if [ -n "${SANDBOX_IMAGE_OVERRIDE:-}" ]; then
+        printf '%s\n' "$SANDBOX_IMAGE_OVERRIDE"
+        return 0
+    fi
     ref="$(sandbox_recorded_image "$name")"
     if valid_image_ref "$ref"; then
         printf '%s\n' "$ref"
@@ -59,19 +63,29 @@ sandbox_image_ref() {
     sandbox_config "$config" image ref "$SANDBOX_DEFAULT_IMAGE"
 }
 
-sandbox_home_path_path() {
-    printf '%s/.sandbox-home\n' "$(sandbox_home_path "$1")"
+sandbox_facts_path() {
+    printf '%s/.sandbox-image-facts\n' "$(sandbox_home_path "$1")"
 }
 
-sandbox_recorded_mount() {
-    head -n 1 "$(sandbox_home_path_path "$1")" 2>/dev/null || true
+# digest, home, user, shell — one per line.
+sandbox_recorded_facts() {
+    cat "$(sandbox_facts_path "$1")" 2>/dev/null || true
 }
 
-sandbox_set_mount() {
+sandbox_set_facts() {
     local path
-    path="$(sandbox_home_path_path "$1")"
+    path="$(sandbox_facts_path "$1")"
     mkdir -p "$(dirname "$path")"
-    printf '%s\n' "$2" > "$path"
+    printf '%s\n%s\n%s\n%s\n' "$2" "$3" "$4" "$5" > "$path"
+}
+
+# Some images say nothing about themselves in their OCI config, so ask the
+# image itself. Overriding the entrypoint keeps this from starting its
+# services just to read three variables.
+sandbox_probe_image() {
+    container run --rm --entrypoint sh "$1" -c \
+        'printf "%s\n" "$HOME"; id -un 2>/dev/null || id -u; printf "%s\n" "$SHELL"' \
+        2>/dev/null | tail -3
 }
 
 sandbox_host_arch() {
@@ -165,18 +179,6 @@ for flag, key in (("--memory", "memory"), ("--cpus", "cpus")):
     if val not in (None, ""):
         print(flag)
         print(val)
-PY
-}
-
-sandbox_image_env_args() {
-    [ -r "$1" ] || return 0
-    python3 - "$1" <<'PY'
-import sys, tomllib
-with open(sys.argv[1], "rb") as f:
-    for entry in tomllib.load(f).get("image", {}).get("env", []):
-        if entry:
-            print("--env")
-            print(entry)
 PY
 }
 
@@ -320,7 +322,8 @@ sandbox_tunnel_url() {
 }
 
 sandbox_file_size() {
-    wc -c < "$1" 2>/dev/null | tr -d ' ' || true
+    [ -f "$1" ] || { printf '0\n'; return 0; }
+    wc -c < "$1" 2>/dev/null | tr -d ' ' || printf '0\n'
 }
 
 list_sandboxes() {
