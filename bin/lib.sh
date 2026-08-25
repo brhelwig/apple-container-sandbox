@@ -82,6 +82,11 @@ sandbox_host_arch() {
     esac
 }
 
+# Unscoped, this fetches every platform the ref carries, ppc64le included.
+sandbox_image_pull() {
+    container image pull --platform "linux/$(sandbox_host_arch)" "$1"
+}
+
 # A heredoc would take over the stdin these readers need for the piped JSON,
 # so the script goes in as an argument instead.
 SANDBOX_IMAGE_CONFIG_PY='

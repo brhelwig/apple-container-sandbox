@@ -53,12 +53,12 @@ resolve_image() {
 
     if [ "$pull" = 1 ]; then
         echo "Fetching $IMAGE_REF ..." >&2
-        container image pull "$IMAGE_REF" >&2 || return 1
+        sandbox_image_pull "$IMAGE_REF" >&2 || return 1
     fi
 
     lines="$(sandbox_image_config "$IMAGE_REF")" || {
         echo "Fetching $IMAGE_REF ..." >&2
-        container image pull "$IMAGE_REF" >&2 || return 1
+        sandbox_image_pull "$IMAGE_REF" >&2 || return 1
         lines="$(sandbox_image_config "$IMAGE_REF")" || {
             echo "Could not read the config of $IMAGE_REF." >&2
             return 1
