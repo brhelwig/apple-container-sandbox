@@ -442,6 +442,29 @@ ok '[ -d "$DHOME" ]'                                     'delete: keeps the home
 run_delete 1
 ok '[ ! -e "$TMP/delete.log" ]'                          'delete: declined -> touches nothing'
 
+STOPSTUB="$TMP/stopstub"
+mkdir -p "$STOPSTUB"
+cp "$DSTUB/container" "$STOPSTUB/container"
+cat > "$STOPSTUB/gum" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"Sandbox:"*)          cat > /dev/null; echo "⏹ Stop…" ;;
+    *"Stop which sandbox"*) cat > /dev/null; echo "$STOP_NAME" ;;
+esac
+STUBEOF
+chmod +x "$STOPSTUB/gum"
+
+SHOME="$SANDBOX_HOMES/stopme"
+mkdir -p "$SHOME"
+echo 'work' > "$SHOME/keepme"
+
+rm -f "$TMP/delete.log"
+DELETE_LOG="$TMP/delete.log" STOP_NAME=stopme \
+    PATH="$STOPSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" >/dev/null 2>&1
+ok 'grep -qx "stop stopme" "$TMP/delete.log"'            'stop: stops the container'
+no 'grep -q "delete" "$TMP/delete.log"'                  'stop: deletes nothing'
+ok '[ -f "$SHOME/keepme" ]'                              'stop: keeps what is in the home dir'
+
 echo "----"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
