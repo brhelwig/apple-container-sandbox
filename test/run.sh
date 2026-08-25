@@ -30,7 +30,7 @@ printf '[resources]\nmemory = "2G"\n' > "$RES"
 ok '[ "$(sandbox_resource_args "$RES" | tr "\n" " ")" = "--memory 2G " ]' 'resource args: memory only'
 printf '[resources]\nmemory = ""\ncpus = ""\n' > "$RES"
 ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: empty values -> none'
-printf '[apt]\npackages = []\n' > "$RES"
+printf '[ssh]\nenabled = true\n' > "$RES"
 ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
 ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
 
