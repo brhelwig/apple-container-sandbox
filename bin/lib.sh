@@ -1,7 +1,16 @@
 : "${SANDBOX_HOMES:=$HOME/Sandboxes}"
 
-SANDBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-. "${SANDBOX_CONFIG_LIB:-$SANDBOX_LIB_DIR/../image/sandbox-config.sh}"
+sandbox_config() {
+    [ -r "$1" ] || { printf '%s\n' "$4"; return 0; }
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    val = tomllib.load(f).get(sys.argv[2], {}).get(sys.argv[3])
+if isinstance(val, bool):
+    val = "true" if val else "false"
+print(sys.argv[4] if val in (None, "") else val)
+PY
+}
 
 validate_name() {
     case "$1" in
@@ -14,8 +23,130 @@ sandbox_home_path() {
     printf '%s/%s\n' "$SANDBOX_HOMES" "$1"
 }
 
+: "${SANDBOX_DEFAULT_IMAGE:=ghcr.io/brhelwig/dev-container:latest-arm64}"
+
+valid_image_ref() {
+    case "${1:-}" in
+        ""|*[!A-Za-z0-9._:/@-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+sandbox_image_path() {
+    printf '%s/.sandbox-image\n' "$(sandbox_home_path "$1")"
+}
+
+sandbox_recorded_image() {
+    head -n 1 "$(sandbox_image_path "$1")" 2>/dev/null || true
+}
+
+sandbox_set_image() {
+    local path
+    path="$(sandbox_image_path "$1")"
+    mkdir -p "$(dirname "$path")"
+    printf '%s\n' "$2" > "$path"
+}
+
+# The pin is written only by --image, so editing [image].ref still reaches
+# every sandbox that never asked for one of its own.
 sandbox_image_ref() {
-    printf '%s\n' "${IMAGE:-sandbox:$1}"
+    local config="$1" name="$2" ref
+    ref="$(sandbox_recorded_image "$name")"
+    if valid_image_ref "$ref"; then
+        printf '%s\n' "$ref"
+        return 0
+    fi
+    sandbox_config "$config" image ref "$SANDBOX_DEFAULT_IMAGE"
+}
+
+sandbox_home_path_path() {
+    printf '%s/.sandbox-home\n' "$(sandbox_home_path "$1")"
+}
+
+sandbox_recorded_mount() {
+    head -n 1 "$(sandbox_home_path_path "$1")" 2>/dev/null || true
+}
+
+sandbox_set_mount() {
+    local path
+    path="$(sandbox_home_path_path "$1")"
+    mkdir -p "$(dirname "$path")"
+    printf '%s\n' "$2" > "$path"
+}
+
+sandbox_host_arch() {
+    case "$(uname -m)" in
+        arm64|aarch64) printf 'arm64\n' ;;
+        x86_64|amd64)  printf 'amd64\n' ;;
+        *)             uname -m ;;
+    esac
+}
+
+# A heredoc would take over the stdin these readers need for the piped JSON,
+# so the script goes in as an argument instead.
+SANDBOX_IMAGE_CONFIG_PY='
+import json, sys
+
+try:
+    images = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+if not images:
+    sys.exit(1)
+
+image = images[0]
+variants = image.get("variants") or []
+wanted = [
+    v for v in variants
+    if v.get("platform", {}).get("os") == "linux"
+    and v.get("platform", {}).get("architecture") == sys.argv[1]
+]
+variant = (wanted or variants or [{}])[0]
+config = (variant.get("config") or {}).get("config") or {}
+env = dict(e.split("=", 1) for e in (config.get("Env") or []) if "=" in e)
+
+workdir = config.get("WorkingDir") or ""
+if not workdir.startswith("/") or workdir == "/":
+    workdir = ""
+
+description = image.get("configuration") or {}
+print(env.get("HOME") or workdir)
+print(config.get("User") or "")
+print(env.get("SHELL") or "")
+print(description.get("name") or "")
+print((description.get("descriptor") or {}).get("digest") or "")
+'
+
+# Prints five lines from the image OCI config: home, user, shell, reference,
+# digest. Empty lines where the image declares nothing.
+sandbox_image_config() {
+    container image inspect "$1" 2>/dev/null \
+        | python3 -c "$SANDBOX_IMAGE_CONFIG_PY" "$(sandbox_host_arch)"
+}
+
+SANDBOX_RUNNING_IMAGE_PY='
+import json, sys
+
+try:
+    containers = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+for c in containers:
+    if c.get("id") != sys.argv[1]:
+        continue
+    image = (c.get("configuration") or {}).get("image") or {}
+    print(image.get("reference") or "")
+    print((image.get("descriptor") or {}).get("digest") or "")
+    print((c.get("status") or {}).get("state") or "")
+    break
+else:
+    sys.exit(1)
+'
+
+# The running container reference, digest and state, one per line.
+sandbox_running_image() {
+    container ls --all --format json 2>/dev/null \
+        | python3 -c "$SANDBOX_RUNNING_IMAGE_PY" "$1"
 }
 
 sandbox_resource_args() {
@@ -29,6 +160,18 @@ for flag, key in (("--memory", "memory"), ("--cpus", "cpus")):
     if val not in (None, ""):
         print(flag)
         print(val)
+PY
+}
+
+sandbox_image_env_args() {
+    [ -r "$1" ] || return 0
+    python3 - "$1" <<'PY'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    for entry in tomllib.load(f).get("image", {}).get("env", []):
+        if entry:
+            print("--env")
+            print(entry)
 PY
 }
 
@@ -97,6 +240,18 @@ sandbox_ssh_port() {
     printf '%s\n' "$port"
 }
 
+sandbox_authorized_keys_path() {
+    printf '%s/.ssh/authorized_keys\n' "$(sandbox_home_path "$1")"
+}
+
+# Blank lines and comments authorize nobody, so they don't count.
+sandbox_authorized_key_count() {
+    local count
+    count="$(grep -cE '^[[:space:]]*[^#[:space:]]' \
+        "$(sandbox_authorized_keys_path "$1")" 2>/dev/null || true)"
+    printf '%s\n' "${count:-0}"
+}
+
 sandbox_seed_authorized_keys() {
     local name="$1" dir keys="" pub host_ssh_dir count
     dir="$(sandbox_home_path "$name")/.ssh"
@@ -113,8 +268,8 @@ sandbox_seed_authorized_keys() {
     chmod 700 "$dir"
     printf '%s' "$keys" > "$dir/authorized_keys"
     chmod 600 "$dir/authorized_keys"
-    count="$(printf '%s' "$keys" | grep -c . || true)"
-    echo "Authorized ${count:-0} of your public keys for SSH into '$name'."
+    count="$(sandbox_authorized_key_count "$name")"
+    echo "Authorized $count of your public keys for SSH into '$name'."
 }
 
 confirm() {
@@ -148,8 +303,19 @@ ensure_gum() {
     return 1
 }
 
-rosetta_bootstrap_failure() {
-    grep -q 'Rosetta is not installed' "$1"
+# The tunnel log is appended across launches, so only what the image wrote
+# after this launch says anything about this launch.
+sandbox_tunnel_url() {
+    local log="$1" offset="${2:-0}"
+    [ -s "$log" ] || return 1
+    tail -c "+$((offset + 1))" "$log" 2>/dev/null \
+        | grep -oE 'https://[^ ]*tunnel[^ ]*' \
+        | tail -1 \
+        | grep .
+}
+
+sandbox_file_size() {
+    wc -c < "$1" 2>/dev/null | tr -d ' ' || true
 }
 
 list_sandboxes() {

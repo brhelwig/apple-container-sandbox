@@ -1,24 +1,17 @@
-[apt]
-packages = []
-
-[brew]
-taps = []
-formulae = []
-casks = []
-
-[post_install]
-commands = []
+[image]
+ref        = "ghcr.io/brhelwig/dev-container:latest-arm64"
+attach     = "zellij attach --create dev"
+tunnel_log = ".code-tunnel.log"
+env        = ["TINI_SUBREAPER=1"]
+# home     = "/home/dev"          # only if the image declares no HOME
+# hold     = "sleep 2147483647"   # only if the image has no GNU-style sleep
 
 [resources]
 memory = "4G"
-cpus = 4
+cpus   = 4
 
 [ssh]
-enabled = true
-port = 2222
-address = "0.0.0.0"
-
-[k3s]
-autostart = false
-disk = "8G"
-node_ip = "10.99.0.1"
+enabled        = true
+port           = 2222
+address        = "0.0.0.0"
+container_port = 22

@@ -5,10 +5,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export SANDBOX_HOMES="$TMP/homes"
-export SANDBOX_CONFIG_LIB="$DIR/../image/sandbox-config.sh"
 
 . "$DIR/../bin/lib.sh"
-. "$SANDBOX_CONFIG_LIB"
 
 pass=0 fail=0
 ok()  { if eval "$1"; then echo "ok   $2"; pass=$((pass+1)); else echo "FAIL $2"; fail=$((fail+1)); fi; }
@@ -36,15 +34,40 @@ printf '[apt]\npackages = []\n' > "$RES"
 ok '[ -z "$(sandbox_resource_args "$RES")" ]' 'resource args: no section -> none'
 ok '[ -z "$(sandbox_resource_args "$TMP/nope.toml")" ]' 'resource args: missing file -> none'
 
-K3S="$TMP/k3s.toml"
-printf '[k3s]\ndisk = "8G"\nnode_ip = "10.99.0.1"\nenabled = true\n' > "$K3S"
-ok '[ "$(sandbox_config "$K3S" k3s disk 4G)" = "8G" ]'             'config: reads disk'
-ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "10.99.0.1" ]' 'config: reads node_ip'
-ok '[ "$(sandbox_config "$K3S" k3s enabled false)" = "true" ]'      'config: booleans print lowercase'
-printf '[k3s]\ndisk = "8G"\n' > "$K3S"
-ok '[ "$(sandbox_config "$K3S" k3s node_ip 1.2.3.4)" = "1.2.3.4" ]' 'config: absent key -> default'
-ok '[ "$(sandbox_config "$K3S" resources memory 1G)" = "1G" ]'     'config: absent section -> default'
-ok '[ "$(sandbox_config "$TMP/nope.toml" k3s disk 8G)" = "8G" ]'   'config: missing file -> default'
+ICFG="$TMP/image.toml"
+printf '[image]\nref = "example/img:1"\nhome = "/home/dev"\npull = true\n' > "$ICFG"
+ok '[ "$(sandbox_config "$ICFG" image ref other)" = "example/img:1" ]' 'config: reads ref'
+ok '[ "$(sandbox_config "$ICFG" image home /home/x)" = "/home/dev" ]'  'config: reads home'
+ok '[ "$(sandbox_config "$ICFG" image pull false)" = "true" ]'         'config: booleans print lowercase'
+printf '[image]\nref = "example/img:1"\n' > "$ICFG"
+ok '[ "$(sandbox_config "$ICFG" image home /home/x)" = "/home/x" ]'    'config: absent key -> default'
+ok '[ "$(sandbox_config "$ICFG" resources memory 1G)" = "1G" ]'        'config: absent section -> default'
+ok '[ "$(sandbox_config "$TMP/nope.toml" image ref d)" = "d" ]'        'config: missing file -> default'
+
+ok 'valid_image_ref "ghcr.io/o/n:latest-arm64"'    'image ref: accepts a registry ref'
+ok 'valid_image_ref "debian@sha256:abc123"'        'image ref: accepts a digest ref'
+no 'valid_image_ref "bad ref"'                     'image ref: rejects a space'
+no 'valid_image_ref "img; rm -rf /"'               'image ref: rejects a shell metacharacter'
+no 'valid_image_ref ""'                            'image ref: rejects empty'
+
+TLOG="$TMP/tunnel.log"
+printf 'open https://old.example/tunnel/a\n' > "$TLOG"
+OFFSET="$(sandbox_file_size "$TLOG")"
+ok '[ "$(sandbox_tunnel_url "$TLOG" 0)" = "https://old.example/tunnel/a" ]' \
+                                                   'tunnel: reads the link out of the log'
+no 'sandbox_tunnel_url "$TLOG" "$OFFSET"'          'tunnel: a link written before this launch is not one'
+printf 'open https://new.example/tunnel/b\n' >> "$TLOG"
+ok '[ "$(sandbox_tunnel_url "$TLOG" "$OFFSET")" = "https://new.example/tunnel/b" ]' \
+                                                   'tunnel: reads the link this launch wrote'
+no 'sandbox_tunnel_url "$TMP/no-such.log" 0'       'tunnel: no log -> no link'
+
+KHOMES="$TMP/keyhomes"
+mkdir -p "$KHOMES/counted/.ssh"
+printf '# a comment\n\n   \nssh-ed25519 AAAAone a\nssh-rsa AAAAtwo b\n' \
+    > "$KHOMES/counted/.ssh/authorized_keys"
+count_keys() { SANDBOX_HOMES="$KHOMES" sandbox_authorized_key_count "$1"; }
+ok '[ "$(count_keys counted)" = 2 ]'               'keys: counts only lines that authorize somebody'
+ok '[ "$(count_keys nosuch)" = 0 ]'                'keys: no file -> none'
 
 mkdir -p "$SANDBOX_HOMES/alpha" "$SANDBOX_HOMES/beta"
 ok '[ "$(list_sandboxes | tr "\n" " ")" = "alpha beta " ]' 'lists sorted dirs'
@@ -66,7 +89,7 @@ printf '[ssh]\nenabled = true\n' > "$SCFG"
 ok 'sandbox_ssh_enabled "$SCFG"'                        'ssh: on when the config says so'
 printf '[ssh]\nenabled = false\n' > "$SCFG"
 no 'sandbox_ssh_enabled "$SCFG"'                        'ssh: off when the config says so'
-printf '[k3s]\ndisk = "8G"\n' > "$SCFG"
+printf '[image]\nref = "example/img:1"\n' > "$SCFG"
 ok 'sandbox_ssh_enabled "$SCFG"'                        'ssh: on with no [ssh] section'
 ok '[ "$(sandbox_ssh_address "$SCFG")" = "0.0.0.0" ]'   'ssh: every address by default'
 printf '[ssh]\naddress = "127.0.0.1"\n' > "$SCFG"
@@ -82,7 +105,7 @@ ok '[ "$(sandbox_ssh_port "$SCFG" two)" = 2301 ]'       'ssh port: skips a port 
 printf '2400\n' > "$SANDBOX_HOMES/two/.sandbox-ssh-port"
 ok '[ "$(sandbox_ssh_port "$SCFG" two)" = 2400 ]'       'ssh port: honours a port written by hand'
 ok '[ "$(sandbox_ssh_port "$SCFG" three)" = 2301 ]'     'ssh port: reuses a port nobody holds now'
-printf '[k3s]\ndisk = "8G"\n' > "$SCFG"
+printf '[image]\nref = "example/img:1"\n' > "$SCFG"
 mkdir -p "$SANDBOX_HOMES/four"
 ok '[ "$(sandbox_ssh_port "$SCFG" four)" = 2222 ]'      'ssh port: falls back to 2222 with no base set'
 
@@ -123,11 +146,6 @@ ok 'grep -q AAAAfirst "$KEYS_BOTH" && grep -q AAAAfourth "$KEYS_BOTH"' \
 
 SANDBOX_HOMES="$SAVED_HOMES"
 
-echo 'cause: "Rosetta is not installed"' > "$TMP/rosetta.log"
-echo 'error: no space left on device' > "$TMP/other.log"
-ok 'rosetta_bootstrap_failure "$TMP/rosetta.log"' 'spots the Rosetta failure'
-no 'rosetta_bootstrap_failure "$TMP/other.log"' 'ignores other failures'
-
 GSTUB="$TMP/gumstub"
 
 run_ensure_gum() {
@@ -162,179 +180,233 @@ no 'run_ensure_gum no yes yes no'           'install without gum on PATH: fails'
 ok 'grep -q "still isn.t on your PATH" "$TMP/err"' 'install without gum on PATH: says so'
 
 REPOCOPY="$TMP/repo"
-STUB="$TMP/stub"
-mkdir -p "$REPOCOPY" "$STUB"
-cp -R "$DIR/../bin" "$DIR/../image" "$REPOCOPY/"
+mkdir -p "$REPOCOPY"
+cp -R "$DIR/../bin" "$REPOCOPY/"
 cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
-cat > "$STUB/container" <<'STUBEOF'
+# Answers `image inspect` and `ls` from fixtures, and logs every argv so the
+# assertions can read back what the launcher asked for.
+CSTUB="$TMP/cstub"
+mkdir -p "$CSTUB"
+cat > "$CSTUB/container" <<'STUBEOF'
 #!/usr/bin/env bash
-case "$1" in
-    build)
-        printf 'x' >> "$STUB/attempts"
-        if [ "$(wc -c < "$STUB/attempts")" -le "$FAIL_BUILDS" ]; then
-            echo "$BUILD_ERROR" >&2
-            exit 1
+printf '%s\n' "$*" >> "$CMD_LOG"
+[ "$1" = run ] && printf '%s\n' "$@" > "$RUN_LOG"
+[ -n "${IMG_ENV+set}" ] || IMG_ENV='"HOME=/home/dev","SHELL=/usr/bin/zsh"'
+case "$1 $2" in
+    "image inspect")
+        [ -n "${IMG_MISSING:-}" ] && exit 1
+        cat <<JSON
+[ { "id": "abc",
+    "configuration": {
+      "creationDate": "2026-01-01T00:00:00Z",
+      "name": "$3",
+      "descriptor": {"digest": "${IMG_DIGEST:-sha256:aaa}"} },
+    "variants": [ ${IMG_VARIANTS:-}
+      { "platform": {"os": "linux", "architecture": "arm64"},
+        "digest": "sha256:v", "size": 1,
+        "config": { "architecture": "arm64", "os": "linux",
+          "config": { "User": "${IMG_USER-dev}",
+                      "Env": [$IMG_ENV],
+                      "WorkingDir": "${IMG_WORKDIR-/home/dev}" } } } ] } ]
+JSON
+        ;;
+    "ls --all")
+        if [ -n "${RUNNING_STATE:-}" ]; then
+            cat <<JSON
+[ { "id": "${RUNNING_NAME:-testbox}",
+    "configuration": {"image": {"reference": "$RUNNING_REF",
+                                "descriptor": {"digest": "$RUNNING_DIGEST"}}},
+    "status": {"state": "$RUNNING_STATE"} } ]
+JSON
+        else
+            echo '[]'
         fi
-        echo 'build ok' ;;
-    *) exit 0 ;;
+        ;;
 esac
-STUBEOF
-cat > "$STUB/sudo" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "$@" >> "$STUB/sudo.log"
-STUBEOF
-cat > "$STUB/gum" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "$@" >> "$STUB/gum.log"
-exit "$GUM_CONFIRM"
-STUBEOF
-chmod +x "$STUB/container" "$STUB/sudo" "$STUB/gum"
-
-ROSETTA_ERR='Error: internalError: "failed to bootstrap container buildkit (cause: "Rosetta is not installed"")"'
-
-run_build() {
-    rm -f "$STUB/attempts" "$STUB/sudo.log" "$STUB/gum.log"
-    out="$(env STUB="$STUB" FAIL_BUILDS="$1" GUM_CONFIRM="$2" BUILD_ERROR="$3" \
-        PATH="$STUB:$PATH" bash "$REPOCOPY/bin/sandbox-build" 2>"$TMP/err")"
-}
-
-run_build 1 0 "$ROSETTA_ERR"; status=$?
-ok '[ "$status" -eq 0 ]'                        'consent: retried build succeeds'
-ok 'grep -q -- "--install-rosetta" "$STUB/sudo.log"' 'consent: installs Rosetta'
-ok '[ "${out#sandbox:}" != "$out" ]'            'consent: prints the image ref'
-
-run_build 9 1 "$ROSETTA_ERR"; status=$?
-ok '[ "$status" -ne 0 ]'                        'declined: fails'
-ok '[ ! -e "$STUB/sudo.log" ]'                  'declined: installs nothing'
-ok 'grep -q "rosetta = false" "$TMP/err"'       'declined: names the arm64-only opt-out'
-
-run_build 9 0 'Error: no space left on device'; status=$?
-ok '[ "$status" -ne 0 ]'                        'other failure: fails'
-ok '[ ! -e "$STUB/gum.log" ]'                   'other failure: no prompt'
-
-LSTUB="$TMP/lstub"
-mkdir -p "$LSTUB"
-cat > "$LSTUB/container" <<'STUBEOF'
-#!/usr/bin/env bash
-[ "$1" = run ] && printf '%s\n' "$@" > "$LAUNCH_LOG"
 exit 0
 STUBEOF
-chmod +x "$LSTUB/container"
+cat > "$CSTUB/gum" <<'STUBEOF'
+#!/usr/bin/env bash
+exit "${GUM_CONFIRM:-1}"
+STUBEOF
+chmod +x "$CSTUB/container" "$CSTUB/gum"
+
+DEFAULT_IMAGE='ghcr.io/brhelwig/dev-container:latest-arm64'
 
 run_launch() {
-    rm -f "$TMP/launch.log"
-    LAUNCH_LOG="$TMP/launch.log" SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
+    rm -f "$TMP/run.log" "$TMP/cmd.log"
+    env RUN_LOG="$TMP/run.log" CMD_LOG="$TMP/cmd.log" \
+        SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
         SANDBOX_HOST_SSH_DIR="$HOSTKEYS" \
-        PATH="$LSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "$@" >/dev/null 2>&1
+        PATH="$CSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "$@" > "$TMP/out.txt" 2>&1
 }
 
 run_launch testbox
-ok '[ -s "$TMP/launch.log" ]'                       'launch: reaches container run'
-ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'launch: passes --cap-add'
-ok 'grep -qx "ALL" "$TMP/launch.log"'               'launch: grants ALL'
-ok 'grep -qx -- "--tty" "$TMP/launch.log"'          'launch: opens a TTY'
-ok 'grep -qx -- "--init" "$TMP/launch.log"'         'launch: runs an init, so orphans get reaped'
-no 'grep -qx -- "--detach" "$TMP/launch.log"'       'launch: stays in the foreground'
-ok 'grep -qx -- "--publish" "$TMP/launch.log"'      'launch: publishes a port for SSH'
-ok 'grep -qx "0.0.0.0:2222:22" "$TMP/launch.log"'   'launch: every address, to port 22 in the sandbox'
+ok '[ -s "$TMP/run.log" ]'                          'launch: reaches container run'
+ok 'grep -qx -- "--cap-add" "$TMP/run.log"'         'launch: passes --cap-add'
+ok 'grep -qx "ALL" "$TMP/run.log"'                  'launch: grants ALL'
+ok 'grep -qx -- "--init" "$TMP/run.log"'            'launch: runs an init, so orphans get reaped'
+ok 'grep -qx -- "--detach" "$TMP/run.log"'          'launch: detaches, so the sandbox outlives the shell'
+no 'grep -qx -- "--tty" "$TMP/run.log"'             'launch: opens no TTY on run'
+ok 'grep -qx "$DEFAULT_IMAGE" "$TMP/run.log"'       'launch: runs the default image'
+ok 'grep -qx -- "--volume" "$TMP/run.log"'          'launch: mounts a volume'
+ok 'grep -q ":/home/dev$" "$TMP/run.log"'           'launch: mounts at the home the image declares'
+ok 'grep -qx "sleep" "$TMP/run.log"'                'launch: holds the container open'
+ok 'grep -q "^exec --interactive --tty" "$TMP/cmd.log"' 'launch: attaches with exec'
+ok 'grep -q "TERM=" "$TMP/cmd.log"'                 'launch: gives the attached shell a TERM'
+ok 'grep -q "is still running" "$TMP/out.txt"'      'launch: says the sandbox outlived the shell'
+ok 'grep -qx -- "--publish" "$TMP/run.log"'         'launch: publishes a port for SSH'
+ok 'grep -qx "0.0.0.0:2222:22" "$TMP/run.log"'      'launch: every address, to port 22 in the sandbox'
 ok '[ "$(cat "$TMP/homes/testbox/.sandbox-ssh-port")" = 2222 ]' \
                                                     'launch: records the SSH port in the home'
 ok 'grep -q AAAAfirst "$TMP/homes/testbox/.ssh/authorized_keys"' \
                                                     'launch: authorizes your keys the first time'
+no '[ -e "$TMP/homes/testbox/.sandbox-image" ]'     'launch: pins no image of its own'
+ok '[ "$(cat "$TMP/homes/testbox/.sandbox-home")" = /home/dev ]' \
+                                                    'launch: records where it mounted'
 
 run_launch -d testbox
-ok '[ -s "$TMP/launch.log" ]'                       'headless: reaches container run'
-ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: detaches'
-no 'grep -qx -- "--tty" "$TMP/launch.log"'          'headless: opens no TTY'
-ok 'grep -qx "/usr/local/bin/sandbox-idle" "$TMP/launch.log"' 'headless: runs sandbox-idle'
-ok 'grep -qx -- "--cap-add" "$TMP/launch.log"'      'headless: keeps --cap-add'
-ok 'grep -qx -- "--init" "$TMP/launch.log"'         'headless: keeps --init'
+ok '[ -s "$TMP/run.log" ]'                          'headless: reaches container run'
+ok 'grep -qx -- "--detach" "$TMP/run.log"'          'headless: detaches'
+no 'grep -q "^exec " "$TMP/cmd.log"'                'headless: attaches nothing'
+ok 'grep -q "Attach a shell" "$TMP/out.txt"'        'headless: says how to get a shell'
+ok 'grep -q "^ssh: " "$TMP/out.txt"'                'headless: reports SSH without entering the sandbox'
 
 run_launch --headless testbox
-ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'headless: --headless is the long form'
+ok 'grep -qx -- "--detach" "$TMP/run.log"'          'headless: --headless is the long form'
 
 run_launch --nope; status=$?
 ok '[ "$status" -eq 2 ]'                            'unknown option: exits 2'
-no '[ -e "$TMP/launch.log" ]'                       'unknown option: launches nothing'
+no '[ -e "$TMP/run.log" ]'                          'unknown option: launches nothing'
 
 run_launch sshbox
-ok 'grep -qx "0.0.0.0:2223:22" "$TMP/launch.log"'   'ssh: the next sandbox gets the next port'
+ok 'grep -qx "0.0.0.0:2223:22" "$TMP/run.log"'      'ssh: the next sandbox gets the next port'
 run_launch othersshbox
-ok 'grep -qx "0.0.0.0:2224:22" "$TMP/launch.log"'   'ssh: and the one after that, the next again'
+ok 'grep -qx "0.0.0.0:2224:22" "$TMP/run.log"'      'ssh: and the one after that, the next again'
 
 run_launch --ssh-port 2345 sshbox
-ok 'grep -qx "0.0.0.0:2345:22" "$TMP/launch.log"'   'ssh-port: publishes the port you name'
+ok 'grep -qx "0.0.0.0:2345:22" "$TMP/run.log"'      'ssh-port: publishes the port you name'
 run_launch sshbox
-ok 'grep -qx "0.0.0.0:2345:22" "$TMP/launch.log"'   'ssh-port: it sticks on the next launch'
+ok 'grep -qx "0.0.0.0:2345:22" "$TMP/run.log"'      'ssh-port: it sticks on the next launch'
 
 run_launch -d --ssh-port 2346 headlessssh
-ok 'grep -qx -- "--detach" "$TMP/launch.log"'       'ssh-port: combines with headless'
-ok 'grep -qx "0.0.0.0:2346:22" "$TMP/launch.log"'   'ssh-port: publishes under headless too'
+ok 'grep -qx -- "--detach" "$TMP/run.log"'          'ssh-port: combines with headless'
+ok 'grep -qx "0.0.0.0:2346:22" "$TMP/run.log"'      'ssh-port: publishes under headless too'
 
 run_launch --ssh-port 99999 toobig; status=$?
 ok '[ "$status" -eq 2 ]'                            'ssh-port: rejects a port out of range'
-no '[ -e "$TMP/launch.log" ]'                       'ssh-port: launches nothing'
+no '[ -e "$TMP/run.log" ]'                          'ssh-port: launches nothing'
 
 printf '[ssh]\nenabled = false\n' > "$REPOCOPY/config.toml"
 run_launch sshoff
-ok '[ -s "$TMP/launch.log" ]'                       'ssh off: still launches'
-no 'grep -qx -- "--publish" "$TMP/launch.log"'      'ssh off: publishes nothing'
+ok '[ -s "$TMP/run.log" ]'                          'ssh off: still launches'
+no 'grep -qx -- "--publish" "$TMP/run.log"'         'ssh off: publishes nothing'
 
 printf '[ssh]\naddress = "127.0.0.1"\nport = 2500\n' > "$REPOCOPY/config.toml"
 run_launch loopbackonly
-ok 'grep -qx "127.0.0.1:2500:22" "$TMP/launch.log"' 'ssh address: publishes on that address alone'
+ok 'grep -qx "127.0.0.1:2500:22" "$TMP/run.log"'    'ssh address: publishes on that address alone'
+
+printf '[ssh]\nport = 2600\ncontainer_port = 2222\n' > "$REPOCOPY/config.toml"
+run_launch otherport
+ok 'grep -qx "0.0.0.0:2600:2222" "$TMP/run.log"'    'ssh: honours a container port the image chose'
 
 cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
-ASTUB="$TMP/astub"
-mkdir -p "$ASTUB"
-cat > "$ASTUB/container" <<'STUBEOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$ATTACH_LOG"
-if [ "$1" = ls ]; then
-    echo 'ID  IMAGE  OS  ARCH  STATE  ADDR'
-    [ -n "${RUNNING_IMAGE:-}" ] && echo "testbox  $RUNNING_IMAGE  linux  arm64  running  192.168.64.2"
-fi
-exit 0
-STUBEOF
-cat > "$ASTUB/gum" <<'STUBEOF'
-#!/usr/bin/env bash
-exit "$GUM_CONFIRM"
-STUBEOF
-chmod +x "$ASTUB/container" "$ASTUB/gum"
+run_launch --image example.com/other:1 pinned
+ok '[ "$(cat "$TMP/homes/pinned/.sandbox-image")" = example.com/other:1 ]' \
+                                                    'image: --image pins the sandbox to that ref'
+ok 'grep -qx "example.com/other:1" "$TMP/run.log"'  'image: --image runs that ref'
+run_launch pinned
+ok 'grep -qx "example.com/other:1" "$TMP/run.log"'  'image: the pin sticks with no flag'
+rm -f "$TMP/homes/pinned/.sandbox-image"
+run_launch pinned
+ok 'grep -qx "$DEFAULT_IMAGE" "$TMP/run.log"'       'image: deleting the pin follows the config again'
 
-CURRENT="sandbox:$(bash "$REPOCOPY/bin/sandbox-src-hash")"
+printf '[image]\nref = "example.com/config:2"\n' > "$REPOCOPY/config.toml"
+run_launch configured
+ok 'grep -qx "example.com/config:2" "$TMP/run.log"' 'image: [image].ref is the default for every sandbox'
+run_launch --image example.com/wins:3 configured
+ok 'grep -qx "example.com/wins:3" "$TMP/run.log"'   'image: a pin beats [image].ref'
+cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
 
-run_attach() {
-    rm -f "$TMP/attach.log"
-    ATTACH_LOG="$TMP/attach.log" RUNNING_IMAGE="$1" GUM_CONFIRM="${2:-1}" \
-        SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
-        PATH="$ASTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "${3:-testbox}" >/dev/null 2>&1
-}
+run_launch --image 'bad ref; rm -rf /' evil; status=$?
+ok '[ "$status" -eq 2 ]'                            'image: rejects a ref that is not one'
+no '[ -e "$TMP/run.log" ]'                          'image: launches nothing on a bad ref'
 
-run_attach "$CURRENT"
-ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'running: attaches a shell'
-no 'grep -q "^run " "$TMP/attach.log"'              'running: starts no second container'
-no 'grep -q "^stop " "$TMP/attach.log"'             'running: stops nothing'
-no 'grep -q "^delete " "$TMP/attach.log"'           'running: deletes nothing'
-no 'grep -q "^build " "$TMP/attach.log"'            'running: builds no image'
+run_launch --pull pulled
+ok 'grep -q "^image pull" "$TMP/cmd.log"'           'pull: --pull fetches the image again'
+run_launch nopull
+no 'grep -q "^image pull" "$TMP/cmd.log"'           'pull: an ordinary launch does not'
 
-run_attach sandbox:stale 1
-ok 'grep -q "sandbox-zellij$" "$TMP/attach.log"'    'stale image, declined: attaches anyway'
-no 'grep -q "^stop " "$TMP/attach.log"'             'stale image, declined: leaves it running'
-no 'grep -q "^delete " "$TMP/attach.log"'           'stale image, declined: deletes nothing'
+IMG_MISSING=1 run_launch notpulled
+ok 'grep -q "^image pull" "$TMP/cmd.log"'           'image: fetches one that is not here yet'
 
-run_attach sandbox:stale 0
-ok 'grep -q "^stop testbox$" "$TMP/attach.log"'         'stale image, confirmed: stops it'
-ok 'grep -q "^delete --force testbox$" "$TMP/attach.log"' 'stale image, confirmed: deletes it'
-ok 'grep -q "^run --rm" "$TMP/attach.log"'              'stale image, confirmed: starts it again'
-no 'grep -q "sandbox-zellij$" "$TMP/attach.log"'        'stale image, confirmed: attaches to nothing'
+IMG_WORKDIR=/home/wd IMG_ENV='"SHELL=/bin/sh"' run_launch workdirbox
+ok 'grep -q ":/home/wd$" "$TMP/run.log"'            'home: falls back to WorkingDir with no HOME'
 
-run_attach "" 1 otherbox
-ok 'grep -q "^run --rm" "$TMP/attach.log"'          'not running: starts it'
-no 'grep -q "confirm" "$TMP/attach.log"'            'not running: asks nothing'
+IMG_WORKDIR=/ IMG_ENV='"SHELL=/bin/sh"' run_launch nohomebox; status=$?
+ok '[ "$status" -ne 0 ]'                            'home: a root WorkingDir is no home, so it stops'
+no '[ -e "$TMP/run.log" ]'                          'home: launches nothing with nowhere to mount'
+ok 'grep -q "image..home" "$TMP/out.txt"'           'home: names the config key that would fix it'
+no 'grep -q "/home/$USER" "$TMP/run.log"'           'home: never guesses your Mac username'
 
+AMD64_VARIANT='{ "platform": {"os": "linux", "architecture": "amd64"},
+  "digest": "sha256:x", "size": 1,
+  "config": {"architecture": "amd64", "os": "linux",
+             "config": {"User": "other", "Env": ["HOME=/home/wrongarch"],
+                        "WorkingDir": "/home/wrongarch"}} },'
+IMG_VARIANTS="$AMD64_VARIANT" run_launch multiarch
+ok 'grep -q ":/home/dev$" "$TMP/run.log"'           'arch: picks the variant matching this Mac'
+no 'grep -q "wrongarch" "$TMP/run.log"'             'arch: ignores the other architecture'
+
+printf '[image]\nhome = "/home/forced"\n' > "$REPOCOPY/config.toml"
+run_launch forcedhome
+ok 'grep -q ":/home/forced$" "$TMP/run.log"'        'home: [image].home overrides the image'
+
+printf '[image]\nattach = "zellij attach --create dev"\n' > "$REPOCOPY/config.toml"
+run_launch attachbox
+ok 'grep -q "zellij attach --create dev" "$TMP/cmd.log"' 'attach: runs the command from the config'
+printf '[image]\nref = "%s"\n' "$DEFAULT_IMAGE" > "$REPOCOPY/config.toml"
+run_launch bareattach
+ok 'grep -q "/usr/bin/zsh -l$" "$TMP/cmd.log"'      'attach: falls back to the shell the image names'
+IMG_ENV='"HOME=/home/dev"' run_launch noshell
+ok 'grep -q "/bin/sh -l$" "$TMP/cmd.log"'           'attach: falls back to /bin/sh when it names none'
+cp "$DIR/../config.toml.example" "$REPOCOPY/config.toml"
+
+mkdir -p "$TMP/homes/tunnelbox"
+printf 'open https://old.tunnel.example/x\n' > "$TMP/homes/tunnelbox/.code-tunnel.log"
+run_launch -d tunnelbox
+no 'grep -q "old.tunnel.example" "$TMP/out.txt"'    'tunnel: a link from an earlier launch is not this one'
+
+mkdir -p "$TMP/homes/movedbox"
+printf '/home/old\n' > "$TMP/homes/movedbox/.sandbox-home"
+run_launch movedbox
+ok 'grep -q "used to mount at /home/old" "$TMP/out.txt"' 'home: says so when the mount point moved'
+
+RUNNING_STATE=running RUNNING_REF="$DEFAULT_IMAGE" RUNNING_DIGEST=sha256:aaa \
+    run_launch testbox
+ok 'grep -q "^exec --interactive --tty" "$TMP/cmd.log"' 'running: attaches to it'
+no 'grep -q "^run " "$TMP/cmd.log"'                 'running: starts no second container'
+no 'grep -q "^stop " "$TMP/cmd.log"'                'running: stops nothing'
+no 'grep -q "^delete " "$TMP/cmd.log"'              'running: deletes nothing'
+
+RUNNING_STATE=running RUNNING_REF="$DEFAULT_IMAGE" RUNNING_DIGEST=sha256:old \
+    GUM_CONFIRM=1 run_launch testbox
+ok 'grep -q "^exec --interactive --tty" "$TMP/cmd.log"' 'stale digest, declined: attaches anyway'
+no 'grep -q "^stop " "$TMP/cmd.log"'                'stale digest, declined: leaves it running'
+no 'grep -q "^delete " "$TMP/cmd.log"'              'stale digest, declined: deletes nothing'
+
+RUNNING_STATE=running RUNNING_REF="$DEFAULT_IMAGE" RUNNING_DIGEST=sha256:old \
+    GUM_CONFIRM=0 run_launch testbox
+ok 'grep -qx "stop testbox" "$TMP/cmd.log"'         'stale digest, confirmed: stops it'
+ok 'grep -qx "delete --force testbox" "$TMP/cmd.log"' 'stale digest, confirmed: deletes it'
+ok 'grep -q "^run " "$TMP/cmd.log"'                 'stale digest, confirmed: starts it again'
+
+RUNNING_STATE=stopped RUNNING_REF="$DEFAULT_IMAGE" RUNNING_DIGEST=sha256:old \
+    GUM_CONFIRM=1 run_launch testbox
+ok 'grep -qx "delete --force testbox" "$TMP/cmd.log"' 'stopped: clears the record without asking'
+ok 'grep -q "^run " "$TMP/cmd.log"'                 'stopped: starts it again'
 DSTUB="$TMP/dstub"
 mkdir -p "$DSTUB"
 cat > "$DSTUB/container" <<'STUBEOF'
@@ -369,305 +441,6 @@ ok '[ -d "$DHOME" ]'                                     'delete: keeps the home
 
 run_delete 1
 ok '[ ! -e "$TMP/delete.log" ]'                          'delete: declined -> touches nothing'
-
-CODEH="$DIR/../image/sandbox-code"
-
-run_code() {
-    local cli="$TMP/code-stub"
-    cat > "$cli" <<STUBEOF
-#!/usr/bin/env bash
-case "\$*" in
-    "tunnel user show") [ "$2" = yes ] && echo 'account' || { echo 'not logged in'; exit 1; } ;;
-    "tunnel status") echo '{"tunnel":null,"service_installed":false}' ;;
-    *) echo "\$*" >> "$TMP/code-stub.log" ;;
-esac
-STUBEOF
-    chmod +x "$cli"
-    SANDBOX_VSCODE_CLI="$cli" HOME="$TMP" \
-        bash "$CODEH" "$1" >"$TMP/vsc.out" 2>&1
-}
-
-rm -f "$TMP/code-stub.log"
-no 'run_code up no'                                     'sandbox-code: up signed out -> fails'
-ok 'grep -q "sandbox-code login" "$TMP/vsc.out"'        'sandbox-code: up signed out names the login command'
-ok '[ ! -e "$TMP/code-stub.log" ]'                      'sandbox-code: up signed out starts no tunnel'
-
-no 'run_code status yes'                                'sandbox-code: status with no tunnel -> fails'
-ok 'grep -q "tunnel: not running" "$TMP/vsc.out"'       'sandbox-code: status says the tunnel is down'
-
-rm -f "$TMP/code-stub.log"
-run_code up yes
-waited=0
-while [ ! -s "$TMP/code-stub.log" ] && [ "$waited" -lt 20 ]; do sleep 0.1; waited=$((waited+1)); done
-ok 'grep -q "^tunnel " "$TMP/code-stub.log"'            'sandbox-code: up signed in starts the tunnel'
-ok 'grep -q -- "--accept-server-license-terms" "$TMP/code-stub.log"' \
-                                                        'sandbox-code: up passes the license flag'
-ok 'grep -q -- "--name" "$TMP/code-stub.log"'           'sandbox-code: up names the tunnel'
-
-SSHH="$DIR/../image/sandbox-ssh"
-SSHHOME="$TMP/sshhome"
-SSHBIN="$TMP/sshbin"
-mkdir -p "$SSHHOME" "$SSHBIN"
-cat > "$SSHBIN/sudo" <<'STUBEOF'
-#!/usr/bin/env bash
-echo "$@" >> "$SUDO_LOG"
-STUBEOF
-chmod +x "$SSHBIN/sudo"
-
-run_ssh() {
-    SUDO_LOG="$TMP/sshd.log" HOME="$SSHHOME" \
-        SANDBOX_SSHD=/fake/sshd SANDBOX_SSHD_CONFIG=/fake/sshd.conf \
-        SANDBOX_SSHD_PID_FILE="$TMP/sshd.pid" SANDBOX_SSHD_PRIVSEP_DIR="$TMP/privsep" \
-        PATH="$SSHBIN:$PATH" bash "$SSHH" "$@" > "$TMP/ssh.out" 2>&1
-}
-
-rm -f "$TMP/sshd.log"
-no 'run_ssh status'                                     'sandbox-ssh: status with no key -> fails'
-ok 'grep -q "not running" "$TMP/ssh.out"'               'sandbox-ssh: status says the server is down'
-ok 'grep -q "authorized_keys" "$TMP/ssh.out"'           'sandbox-ssh: status names the keys file'
-no 'run_ssh up'                                         'sandbox-ssh: up with no key -> fails'
-ok 'grep -q "Sandboxes" "$TMP/ssh.out"'                 'sandbox-ssh: up says where to put a key'
-ok '[ ! -e "$TMP/sshd.log" ]'                           'sandbox-ssh: up with no key starts nothing'
-
-mkdir -p "$SSHHOME/.ssh" "$SSHHOME/.sandbox-ssh"
-printf '# a comment\n\nssh-ed25519 AAAAmine me\n' > "$SSHHOME/.ssh/authorized_keys"
-printf 'host key\n' > "$SSHHOME/.sandbox-ssh/ssh_host_ed25519_key"
-printf '2222\n' > "$SSHHOME/.sandbox-ssh-port"
-
-ok 'run_ssh up'                                         'sandbox-ssh: up with a key starts the server'
-ok 'grep -q -- "-f /fake/sshd.conf" "$TMP/sshd.log"'    'sandbox-ssh: up names the config'
-ok 'grep -q -- "-h $SSHHOME/.sandbox-ssh/ssh_host_ed25519_key" "$TMP/sshd.log"' \
-                                                        'sandbox-ssh: up serves the sandbox host key'
-ok 'grep -q "PidFile=$TMP/sshd.pid" "$TMP/sshd.log"'    'sandbox-ssh: up sets the pid file'
-ok 'grep -q -- "-E $SSHHOME/.sandbox-ssh.log" "$TMP/sshd.log"' \
-                                                        'sandbox-ssh: up logs into the home'
-ok 'grep -q "mkdir -p $TMP/privsep" "$TMP/sshd.log"'    'sandbox-ssh: up makes the privilege separation dir'
-ok 'grep -q "ssh -p 2222" "$TMP/ssh.out"'               'sandbox-ssh: up prints the ssh command'
-ok 'grep -q "tailnet" "$TMP/ssh.out"'                   'sandbox-ssh: up says it is reachable from elsewhere'
-
-rm -f "$SSHHOME/.sandbox-ssh-port"
-ok 'run_ssh up'                                         'sandbox-ssh: up runs with no port recorded'
-ok 'grep -q "relaunch the sandbox" "$TMP/ssh.out"'      'sandbox-ssh: up says to relaunch for a port'
-
-ok 'run_ssh down'                                       'sandbox-ssh: down with no server runs'
-ok 'grep -q "not running" "$TMP/ssh.out"'               'sandbox-ssh: down says there was nothing to stop'
-
-ok 'run_ssh --help'                                     'sandbox-ssh: --help runs'
-ok 'grep -q "sandbox-ssh up" "$TMP/ssh.out"'            'sandbox-ssh: --help explains it'
-run_ssh nonsense; status=$?
-ok '[ "$status" -eq 2 ]'                                'sandbox-ssh: an unknown command exits 2'
-
-SSHDCONF="$DIR/../image/sandbox-sshd.conf"
-ok 'grep -qx "PasswordAuthentication no" "$SSHDCONF"'   'sshd config: refuses passwords'
-ok 'grep -qx "PermitRootLogin no" "$SSHDCONF"'          'sshd config: refuses root'
-ok 'grep -qx "PubkeyAuthentication yes" "$SSHDCONF"'    'sshd config: takes keys'
-ok 'grep -q "^Subsystem sftp" "$SSHDCONF"'              'sshd config: serves sftp, so scp and rsync work'
-
-MANGEN="$DIR/../image/sandbox-manpage"
-MCFG="$TMP/man.toml"
-MOUT="$TMP/sandbox.7"
-gen_man() { python3 "$MANGEN" "$MCFG" "$@" > "$MOUT" 2>"$TMP/man.err"; }
-BASE='"curl man-db zsh" "podman" "terraform-linters/tap" "cloudflared gh" ""'
-
-cat > "$MCFG" <<'TOML'
-[apt]
-packages = ["ripgrep"]
-[brew]
-taps = ["hashicorp/tap"]
-formulae = ["jq"]
-casks = ["tflint"]
-[post_install]
-commands = ["gcloud components install gke-gcloud-auth-plugin --quiet"]
-[resources]
-memory = "4G"
-cpus = 4
-[k3s]
-disk = "8G"
-TOML
-ok "gen_man $BASE"                                      'sandbox-manpage: writes a page'
-ok 'head -1 "$MOUT" | grep -q "^\.TH SANDBOX 7"'        'sandbox-manpage: starts with the man header'
-ok 'grep -qF "curl, man\\-db, zsh" "$MOUT"'             'sandbox-manpage: lists the base toolchain'
-ok 'grep -q "podman, ripgrep" "$MOUT"'                  'sandbox-manpage: merges the base and added apt packages'
-ok 'grep -q "cloudflared, gh, jq" "$MOUT"'              'sandbox-manpage: merges the base and added formulae'
-ok 'grep -q "hashicorp/tap" "$MOUT"'                    'sandbox-manpage: lists an added tap'
-ok 'grep -qF "terraform\\-linters/tap" "$MOUT"'         'sandbox-manpage: lists a base tap'
-ok 'grep -q "tflint" "$MOUT"'                           'sandbox-manpage: lists an added cask'
-ok 'grep -qF "gke\\-gcloud\\-auth\\-plugin" "$MOUT"'    'sandbox-manpage: lists the post_install commands'
-ok 'grep -q "config.toml" "$MOUT"'                      'sandbox-manpage: says where to add a tool'
-ok 'grep -q "BREW_FORMULAE" "$MOUT"'                    'sandbox-manpage: names the base lists'
-ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s'
-ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code'
-ok 'grep -qF "sandbox\\-ssh up" "$MOUT"'                'sandbox-manpage: documents sandbox-ssh'
-ok 'grep -q "authorized_keys" "$MOUT"'                  'sandbox-manpage: says where a key goes'
-ok 'grep -qF "ssh\\-keygen \\-t ed25519" "$MOUT"'       'sandbox-manpage: says how to make a key'
-ok 'grep -q "no password" "$MOUT"'                      'sandbox-manpage: says there is no password'
-ok 'grep -q "tailnet" "$MOUT"'                          'sandbox-manpage: says it reaches beyond the Mac'
-ok 'grep -q "enter the code it prints" "$MOUT"'         'sandbox-manpage: gives the tunnel sign-in steps'
-ok 'grep -qF "sandbox\\-code status" "$MOUT"'           'sandbox-manpage: says how to get the tunnel link'
-ok 'grep -qF "use\\-context k3s" "$MOUT"'               'sandbox-manpage: says how to select the cluster context'
-ok 'grep -qF "Ctrl\\-o" "$MOUT"'                        'sandbox-manpage: says how to detach the session'
-ok 'grep -q "^4G$" "$MOUT"'                             'sandbox-manpage: reports the memory limit'
-
-no 'grep -qF "man-db" "$MOUT"'                          'sandbox-manpage: escapes hyphens for troff'
-
-printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
-ok 'gen_man'                                            'sandbox-manpage: writes a page with nothing installed on top'
-ok '[ "$(grep -c "^None\.$" "$MOUT")" -ge 6 ]'          'sandbox-manpage: says so where a list is empty'
-ok 'grep -qF "sandbox\\-k3s up" "$MOUT"'                'sandbox-manpage: documents sandbox-k3s regardless of config'
-ok 'grep -qF "sandbox\\-code login" "$MOUT"'            'sandbox-manpage: documents sandbox-code regardless of config'
-
-ok 'grep -q "The server starts at launch" "$MOUT"'      'sandbox-manpage: says the SSH server starts at launch'
-printf '[ssh]\nenabled = false\n' > "$MCFG"
-ok 'gen_man'                                            'sandbox-manpage: writes a page with ssh off'
-ok 'grep -q "does not start at launch, because \[ssh\]" "$MOUT"' \
-                                                        'sandbox-manpage: says so when ssh is off'
-
-printf '[k3s]\ndisk = "8G"\n' > "$MCFG"
-ok 'gen_man'                                            'sandbox-manpage: writes a page again'
-ok 'grep -q "does not start at launch" "$MOUT"'         'sandbox-manpage: says k3s stays stopped by default'
-printf '[k3s]\nautostart = true\n' > "$MCFG"
-ok 'gen_man'                                            'sandbox-manpage: writes a page with k3s autostart on'
-ok 'grep -q "starts at launch" "$MOUT"'                 'sandbox-manpage: says k3s starts at launch when autostart is on'
-no 'grep -q "does not start at launch" "$MOUT"'         'sandbox-manpage: drops the stopped wording when autostart is on'
-
-ENTRY="$DIR/../image/entrypoint.sh"
-EBIN="$TMP/ebin"
-ELOG="$TMP/entry.log"
-ECFG="$TMP/entry.toml"
-mkdir -p "$EBIN" "$TMP/ehome"
-for helper in sandbox-kubeconfig sandbox-k3s sandbox-code sandbox-ssh sandbox-setup; do
-    printf '#!/bin/sh\necho "%s $*" >> "$SANDBOX_TEST_LOG"\n' "$helper" > "$EBIN/$helper"
-    chmod +x "$EBIN/$helper"
-done
-run_entrypoint() {
-    : > "$ELOG"
-    HOME="$TMP/ehome" SANDBOX_BIN="$EBIN" SANDBOX_CONFIG="$ECFG" \
-        SANDBOX_TEST_LOG="$ELOG" bash "$ENTRY" true
-}
-
-printf '[k3s]\ndisk = "8G"\n' > "$ECFG"
-ok 'run_entrypoint'                        'entrypoint: runs'
-ok 'grep -q "sandbox-kubeconfig" "$ELOG"'  'entrypoint: builds the kubeconfig'
-ok 'grep -q "sandbox-code up" "$ELOG"'     'entrypoint: starts the VS Code tunnel'
-ok 'grep -q "sandbox-ssh up" "$ELOG"'      'entrypoint: no [ssh] section -> starts the SSH server'
-ok 'grep -q "sandbox-setup" "$ELOG"'       'entrypoint: runs the per-launch setup'
-no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: no autostart key -> k3s stays stopped'
-
-printf '[ssh]\nenabled = false\n' > "$ECFG"
-ok 'run_entrypoint'                        'entrypoint: runs with ssh off'
-no 'grep -q "sandbox-ssh" "$ELOG"'         'entrypoint: ssh disabled -> no SSH server'
-ok 'grep -q "sandbox-code up" "$ELOG"'     'entrypoint: ssh disabled -> the tunnel still starts'
-
-printf '[ssh]\nenabled = true\n' > "$ECFG"
-ok 'run_entrypoint'                        'entrypoint: runs with ssh on'
-ok 'grep -q "sandbox-ssh up" "$ELOG"'      'entrypoint: ssh enabled -> starts the SSH server'
-
-printf '[k3s]\nautostart = false\n' > "$ECFG"
-ok 'run_entrypoint'                        'entrypoint: runs with autostart off'
-no 'grep -q "sandbox-k3s" "$ELOG"'         'entrypoint: autostart false -> k3s stays stopped'
-
-printf '[k3s]\nautostart = true\n' > "$ECFG"
-ok 'run_entrypoint'                        'entrypoint: runs with autostart on'
-ok 'grep -q "sandbox-k3s up" "$ELOG"'      'entrypoint: autostart true -> starts k3s'
-
-NICE="$DIR/../image/sandbox-nice.sh"
-if [ -e /proc/self/oom_score_adj ]; then
-    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(nice)\" = 10 ]"' \
-                                                            'sandbox-nice: nices the shell'
-    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; [ \"\$(cat /proc/self/oom_score_adj)\" = 1000 ]"' \
-                                                            'sandbox-nice: volunteers for the OOM killer'
-    ok 'CLAUDECODE=1 bash -c ". \"$NICE\"; nice" | grep -q 10' \
-                                                            'sandbox-nice: a child inherits the nice value'
-
-    unchanged() { env -u CLAUDECODE bash -c "before=\$($1); . \"$NICE\"; [ \"\$($1)\" = \"\$before\" ]"; }
-
-    ok 'unchanged nice'                                     'sandbox-nice: leaves other shells alone'
-    ok 'unchanged "cat /proc/self/oom_score_adj"'           'sandbox-nice: leaves their OOM score alone'
-
-    ok 'CLAUDECODE=1 bash -uc ". \"$NICE\""'                'sandbox-nice: survives set -u'
-    ok 'CLAUDECODE=1 PATH=/nonexistent /bin/bash -c ". \"$NICE\""' \
-                                                            'sandbox-nice: survives a missing renice'
-
-    BG="$DIR/../image/sandbox-background"
-    run_bg() { env -u CLAUDECODE SANDBOX_NICE="$NICE" sh "$BG" "$@"; }
-
-    ok '[ "$(run_bg nice)" = 10 ]'                          'sandbox-background: nices the command'
-    ok '[ "$(run_bg cat /proc/self/oom_score_adj)" = 1000 ]' \
-                                                            'sandbox-background: volunteers it for the OOM killer'
-    ok '[ "$(run_bg sh -c "sh -c nice")" = 10 ]'            'sandbox-background: what it starts inherits'
-
-    no 'run_bg sh -c "cat /proc/\$\$/cmdline" | grep -qa sandbox-background' \
-                                                            'sandbox-background: execs, leaving argv alone'
-    no 'run_bg > /dev/null 2>&1'                            'sandbox-background: no command -> fails'
-    ok 'run_bg --help | grep -q "background work"'          'sandbox-background: --help explains it'
-fi
-
-WELCOME="$DIR/../image/sandbox-welcome"
-WMARK="$TMP/welcomed"
-run_welcome() { SANDBOX_WELCOME_MARKER="$WMARK" bash "$WELCOME" > "$TMP/welcome.out" 2>&1; }
-
-ok 'run_welcome'                                        'sandbox-welcome: runs'
-ok 'grep -q "man sandbox" "$TMP/welcome.out"'           'sandbox-welcome: names the man page'
-ok '[ -e "$WMARK" ]'                                    'sandbox-welcome: records that it printed'
-ok 'run_welcome'                                        'sandbox-welcome: runs again'
-ok '[ ! -s "$TMP/welcome.out" ]'                        'sandbox-welcome: stays quiet the second time'
-
-KUBE="$DIR/../image/sandbox-kubeconfig"
-KHOME="$TMP/kubehome"
-KSHIM="$TMP/kubeshim"
-KSRC="$TMP/k3s-src.yaml"
-
-run_kubeconfig() {
-    HOME="$KHOME" SANDBOX_KUBE_DIR="$KSHIM" SANDBOX_K3S_KUBECONFIG="$KSRC" \
-        bash "$KUBE" >"$TMP/kube.out" 2>&1
-}
-
-rm -rf "$KHOME" "$KSHIM"; rm -f "$KSRC"
-ok 'run_kubeconfig'                                  'kubeconfig: runs with no home and no cluster'
-ok '[ -L "$KSHIM/config" ]'                          'kubeconfig: shim entry is a symlink'
-ok '[ "$(readlink "$KSHIM/config")" = "$KHOME/.kube/config" ]' \
-                                                     'kubeconfig: shim entry targets the home kubeconfig'
-ok '[ -f "$KHOME/.kube/config" ]'                    'kubeconfig: seeds a kubeconfig when absent'
-ok 'grep -q "^kind: Config" "$KHOME/.kube/config"'   'kubeconfig: seeded file is a kubeconfig'
-ok '[ "$(filemode "$KHOME/.kube/config")" = 600 ]'   'kubeconfig: seeded file is private'
-ok '[ ! -e "$KSHIM/k3s.yaml" ]'                      'kubeconfig: no cluster -> no cluster entry'
-
-printf 'apiVersion: v1\nkind: Config\n# sentinel\n' > "$KHOME/.kube/config"
-ok 'run_kubeconfig'                                  'kubeconfig: re-runs against an existing kubeconfig'
-ok 'grep -q "# sentinel" "$KHOME/.kube/config"'      'kubeconfig: never clobbers an existing kubeconfig'
-ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: leaves the home kubeconfig a real file'
-
-cat > "$KSRC" <<'EOF'
-apiVersion: v1
-clusters:
-- cluster:
-    certificate-authority-data: QQ==
-    server: https://127.0.0.1:6443
-  name: default
-contexts:
-- context:
-    cluster: default
-    user: default
-  name: default
-current-context: default
-kind: Config
-users:
-- name: default
-  user:
-    client-certificate-data: QQ==
-EOF
-ok 'run_kubeconfig'                                  'kubeconfig: runs with a cluster present'
-ok '[ -f "$KSHIM/k3s.yaml" ]'                        'kubeconfig: renders the cluster entry'
-no 'grep -q ": default$" "$KSHIM/k3s.yaml"'          'kubeconfig: leaves no "default" name behind'
-ok '[ "$(grep -c ": k3s$" "$KSHIM/k3s.yaml")" -eq 6 ]' \
-                                                     'kubeconfig: renames cluster, user, context and current-context'
-ok 'grep -q "server: https://127.0.0.1:6443" "$KSHIM/k3s.yaml"' \
-                                                     'kubeconfig: keeps the cluster endpoint'
-ok '[ "$(filemode "$KSHIM/k3s.yaml")" = 600 ]'       'kubeconfig: rendered cluster entry is private'
-
-printf 'written through\n' > "$KSHIM/config"
-ok 'grep -q "written through" "$KHOME/.kube/config"' 'kubeconfig: shim writes through to the home file'
-ok '[ ! -L "$KHOME/.kube/config" ]'                  'kubeconfig: write-through keeps the home file real'
 
 echo "----"
 echo "$pass passed, $fail failed"
