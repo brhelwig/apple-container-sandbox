@@ -1,2 +1,0 @@
-#!/usr/bin/env zsh
-exec /home/linuxbrew/.linuxbrew/bin/zellij attach --create "$(hostname)"

@@ -4,35 +4,103 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 . "$REPO/bin/lib.sh"
 
-USERNAME="${SANDBOX_USER:-${USER:-dev}}"
+CONFIG="$REPO/config.toml"
 
 usage() {
     cat <<EOF
 sandbox — ad-hoc Linux sandboxes on Apple Container
 
-  sandbox                    Open the menu (launch, or create/rename/delete).
-  sandbox <name>             Launch <name> (offers to create it if new).
-  sandbox -d <name>          Launch <name> headless: no terminal, no zellij session.
-  sandbox --ssh-port <port>  Serve <name>'s SSH on this port of the Mac instead.
+  sandbox                    Open the menu (launch, or stop/rename/delete).
+  sandbox <name>             Launch <name> and attach a shell to it.
+  sandbox -d <name>          Launch <name> without attaching anything.
+  sandbox --image <ref>      Run <name> on this image from now on.
+  sandbox --pull <name>      Fetch the image again before launching.
+  sandbox --ssh-port <port>  Serve <name>'s SSH on this port of the Mac.
   sandbox --help             This help.
 
-A headless sandbox runs detached, with the VS Code tunnel and the cluster up, so
-you can close the terminal and open it from VS Code. Attach a shell to one at any
-time with \`sandbox <name>\`, and stop it from the menu or with
-\`container stop <name>\`.
+Sandboxes run detached and keep running when you leave the shell, so a build
+or an agent you start inside one survives closing the terminal. Stop one from
+the menu or with \`container stop <name>\`.
 
-Every sandbox also serves SSH, on a port of the Mac that is its own, so
-\`ssh -p <port> $USERNAME@<the Mac>\` reaches it from anywhere that can reach the
-Mac, a tailnet included. The port is kept in ~/Sandboxes/<name>/.sandbox-ssh-port
-and stays the same across launches. Only a key gets in; there is no password.
+Every sandbox runs a published image rather than one built here. It defaults to
+$SANDBOX_DEFAULT_IMAGE, and \`[image].ref\` in
+config.toml changes that for every sandbox. \`--image\` pins one sandbox to a
+ref of its own, recorded in ~/Sandboxes/<name>/.sandbox-image; delete that file
+to follow the config again.
 
-Launching a sandbox that already runs attaches to it and leaves it running. When
-the image changed since it started, \`sandbox\` asks first, because a restart
-loses everything running inside.
+Every sandbox also serves SSH, on a port of the Mac that is its own, so it can
+be reached from anywhere that reaches the Mac, a tailnet included. The port is
+kept in ~/Sandboxes/<name>/.sandbox-ssh-port and stays the same across launches.
+Only a key gets in; there is no password.
 
 Homes live under \$SANDBOX_HOMES (default ~/Sandboxes). The container mounts
 only its home dir; drop files into ~/Sandboxes/<name> in Finder.
 EOF
+}
+
+IMAGE_REF="" IMAGE_HOME="" IMAGE_USER="" IMAGE_SHELL="" IMAGE_DIGEST=""
+
+# Fills the IMAGE_* globals from the image itself, so the mount target, the
+# login name and the shell come from the image rather than from this Mac or
+# from something you had to write in a config file.
+resolve_image() {
+    local name="$1" pull="$2" lines cached probed
+    IMAGE_REF="$(sandbox_image_ref "$CONFIG" "$name")"
+
+    if ! valid_image_ref "$IMAGE_REF"; then
+        echo "Invalid image ref: '$IMAGE_REF'." >&2
+        return 2
+    fi
+
+    if [ "$pull" = 1 ]; then
+        echo "Fetching $IMAGE_REF ..." >&2
+        sandbox_image_pull "$IMAGE_REF" >&2 || return 1
+    fi
+
+    lines="$(sandbox_image_config "$IMAGE_REF")" || {
+        echo "Fetching $IMAGE_REF ..." >&2
+        sandbox_image_pull "$IMAGE_REF" >&2 || return 1
+        lines="$(sandbox_image_config "$IMAGE_REF")" || {
+            echo "Could not read the config of $IMAGE_REF." >&2
+            return 1
+        }
+    }
+
+    IMAGE_HOME="$(printf '%s\n' "$lines" | sed -n 1p)"
+    IMAGE_USER="$(printf '%s\n' "$lines" | sed -n 2p)"
+    IMAGE_SHELL="$(printf '%s\n' "$lines" | sed -n 3p)"
+    IMAGE_DIGEST="$(printf '%s\n' "$lines" | sed -n 5p)"
+
+    if [ -z "$IMAGE_HOME" ] || [ -z "$IMAGE_SHELL" ] || ! usable_name "$IMAGE_USER"; then
+        cached="$(sandbox_recorded_facts "$name")"
+        if [ "$(printf '%s\n' "$cached" | sed -n 1p)" = "$IMAGE_DIGEST" ]; then
+            probed="$(printf '%s\n' "$cached" | sed -n '2,4p')"
+        else
+            echo "Asking $IMAGE_REF where it keeps its home ..." >&2
+            probed="$(sandbox_probe_image "$IMAGE_REF")"
+        fi
+        [ -n "$IMAGE_HOME" ] || IMAGE_HOME="$(printf '%s\n' "$probed" | sed -n 1p)"
+        usable_name "$IMAGE_USER" || IMAGE_USER="$(printf '%s\n' "$probed" | sed -n 2p)"
+        [ -n "$IMAGE_SHELL" ] || IMAGE_SHELL="$(printf '%s\n' "$probed" | sed -n 3p)"
+    fi
+
+    if [ -z "$IMAGE_HOME" ]; then
+        echo "$IMAGE_REF has no home directory to mount '$name' over." >&2
+        return 1
+    fi
+
+    [ -n "$IMAGE_SHELL" ] || IMAGE_SHELL=/bin/sh
+    sandbox_set_facts "$name" "$IMAGE_DIGEST" "$IMAGE_HOME" "$IMAGE_USER" "$IMAGE_SHELL"
+    return 0
+}
+
+# A uid names no account anyone can ssh to, so it is not a name we can use.
+usable_name() {
+    case "${1:-}" in
+        ""|*[!a-zA-Z0-9._-]*) return 1 ;;
+        *[!0-9]*)             return 0 ;;
+        *)                    return 1 ;;
+    esac
 }
 
 run_container() {
@@ -41,104 +109,201 @@ run_container() {
 
     local -a resource_args=()
     while IFS= read -r line; do resource_args+=("$line"); done \
-        < <(sandbox_resource_args "$REPO/config.toml")
+        < <(sandbox_resource_args "$CONFIG")
 
-    container run --rm \
+    # An image whose entrypoint is tini warns unless it knows it is not PID 1.
+    container run --detach --rm \
         --name "$name" \
-        --volume "$home:/home/$USERNAME" \
+        --volume "$home:$IMAGE_HOME" \
         ${resource_args[@]+"${resource_args[@]}"} \
+        --env TINI_SUBREAPER=1 \
         --cap-add ALL \
         --init \
         "$@"
 }
 
-report_tunnel() {
-    local name="$1" waited=0
-    while [ "$waited" -lt "${SANDBOX_TUNNEL_WAIT:-30}" ]; do
-        container exec "$name" /usr/local/bin/sandbox-code status >/dev/null 2>&1 && break
-        sleep 2
-        waited=$((waited + 2))
-    done
-    container exec "$name" /usr/local/bin/sandbox-code status || true
+running_now() {
+    [ "$(sandbox_running_image "$1" 2>/dev/null | sed -n 3p)" = "running" ]
+}
+
+# Nothing injects TERM, so without this zellij and vim draw on a dumb terminal.
+# zellij keeps the session alive between attaches; images without it get a
+# plain login shell.
+attach() {
+    local name="$1"
+
+    container exec --interactive --tty \
+        --env "TERM=${TERM:-xterm-256color}" \
+        "$name" "$IMAGE_SHELL" -lc \
+        "command -v zellij >/dev/null 2>&1 && exec zellij attach --create $name; exec $IMAGE_SHELL -l" \
+        || true
+
+    if running_now "$name"; then
+        echo "'$name' is still running. Stop it from the menu, or with: container stop $name"
+    else
+        echo "'$name' is not running any more." >&2
+    fi
 }
 
 report_ssh() {
-    container exec "$1" /usr/local/bin/sandbox-ssh status || true
-}
-
-attach() {
-    local name="$1" headless="$2"
-    if [ "$headless" = 1 ]; then
-        echo "'$name' is already running. Attach a shell with: sandbox $name"
-        report_tunnel "$name"
-        report_ssh "$name"
+    local name="$1" port count
+    sandbox_ssh_enabled "$CONFIG" || { echo "ssh: off in config.toml"; return 0; }
+    port="$(sandbox_recorded_ssh_port "$name")"
+    count="$(sandbox_authorized_key_count "$name")"
+    if [ "$count" -eq 0 ]; then
+        echo "ssh: no authorized key, so nothing can log in."
+        echo "     add one to $(sandbox_authorized_keys_path "$name")"
         return 0
     fi
-    exec container exec --interactive --tty "$name" /usr/local/bin/sandbox-zellij
+    echo "ssh: $count authorized key(s); ssh -p $port $IMAGE_USER@127.0.0.1"
+    echo "     the same port on the Mac's own address reaches it from elsewhere"
+}
+
+# The log the VS Code CLI writes, in the sandbox home. Absent in an image that
+# runs no tunnel, and then this reports nothing.
+TUNNEL_LOG=.code-tunnel.log
+
+report_tunnel() {
+    local name="$1" offset="$2" log waited=0 url
+    log="$(sandbox_home_path "$name")/$TUNNEL_LOG"
+    [ -e "$log" ] || return 0
+
+    while [ "$waited" -lt "${SANDBOX_TUNNEL_WAIT:-30}" ]; do
+        if url="$(sandbox_tunnel_url "$log" "$offset")"; then
+            echo "tunnel: $url"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    echo "tunnel: no link yet; the image reports it in ${log##*/}"
+}
+
+start_container() {
+    local name="$1" home="$2"
+    local -a ssh_args=()
+
+    if sandbox_ssh_enabled "$CONFIG"; then
+        sandbox_seed_authorized_keys "$name"
+        ssh_args=(--publish "$(sandbox_ssh_address "$CONFIG"):$(sandbox_ssh_port "$CONFIG" "$name"):22")
+    fi
+
+    echo "Launching '$name' on $IMAGE_REF ..." >&2
+    # `sleep infinity` is a GNU extension, so spell out a number busybox takes.
+    run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} \
+        "$IMAGE_REF" sleep 2147483647 >/dev/null
+}
+
+warn_moved_home() {
+    local name="$1" previous="$2"
+    [ -n "$previous" ] || return 0
+    [ "$previous" != "$IMAGE_HOME" ] || return 0
+    echo "'$name' used to mount at $previous and now mounts at $IMAGE_HOME." >&2
+    echo "Its files are all still there; dotfiles laid out for the old path are not." >&2
 }
 
 launch() {
-    local name="$1" headless="${2:-0}" ssh_port="${3:-}" home image running_image
-    local -a ssh_args=()
+    local name="$1" headless="${2:-0}" ssh_port="${3:-}" image="${4:-}" pull="${5:-0}"
+    local home offset=0 running ref digest state was_home
+
     home="$(sandbox_home_path "$name")"
     mkdir -p "$home"
+
+    if [ -n "$image" ] && ! valid_image_ref "$image"; then
+        echo "Invalid image ref: '$image'." >&2
+        return 2
+    fi
 
     if [ -n "$ssh_port" ]; then
         sandbox_set_ssh_port "$name" "$ssh_port"
     fi
 
-    if sandbox_ssh_enabled "$REPO/config.toml"; then
-        sandbox_seed_authorized_keys "$name"
-        ssh_args=(--publish "$(sandbox_ssh_address "$REPO/config.toml"):$(sandbox_ssh_port "$REPO/config.toml" "$name"):22")
+    # resolve_image rewrites the facts, so read the old mount point first.
+    was_home="$(printf '%s\n' "$(sandbox_recorded_facts "$name")" | sed -n 2p)"
+
+    SANDBOX_IMAGE_OVERRIDE="$image" resolve_image "$name" "$pull" || return 1
+    warn_moved_home "$name" "$was_home"
+
+    # Only once the ref has proved itself, so a typo does not silently become
+    # the sandbox's permanent image.
+    [ -n "$image" ] && sandbox_set_image "$name" "$image"
+
+    if running="$(sandbox_running_image "$name")"; then
+        ref="$(printf '%s\n' "$running" | sed -n 1p)"
+        digest="$(printf '%s\n' "$running" | sed -n 2p)"
+        state="$(printf '%s\n' "$running" | sed -n 3p)"
+    else
+        ref="" digest="" state=""
     fi
 
-    running_image="$(container ls 2>/dev/null | awk -v n="$name" '$1 == n {print $2}')"
-
-    if [ -n "$running_image" ] && [ -n "$ssh_port" ]; then
-        echo "'$name' is already running; port $ssh_port serves it once it next starts."
-    fi
-
-    if [ -n "$running_image" ]; then
-        if [ "$running_image" = "$(sandbox_image_ref "$("$REPO/bin/sandbox-src-hash")")" ]; then
-            attach "$name" "$headless"
-            return
+    if [ "$state" = "running" ]; then
+        if [ -n "$ssh_port" ]; then
+            echo "'$name' is already running; port $ssh_port serves it once it next starts."
         fi
-        echo "'$name' is running on $running_image, and the image has changed since." >&2
+        if same_image "$ref" "$digest"; then
+            if [ "$headless" = 1 ]; then
+                echo "'$name' is already running. Attach a shell with: sandbox $name"
+                report_ssh "$name"
+                return 0
+            fi
+            attach "$name"
+            return 0
+        fi
+        echo "'$name' is running on an older $ref, and the image has changed since." >&2
         if ! confirm "Restart '$name' on the new image? Everything running inside it is lost."; then
-            attach "$name" "$headless"
-            return
+            [ "$headless" = 1 ] || attach "$name"
+            return 0
         fi
         container stop "$name" >/dev/null 2>&1 || true
     fi
 
     container delete --force "$name" >/dev/null 2>&1 || true
 
-    image="$(bash "$REPO/bin/sandbox-build" | tail -1)"
+    offset="$(sandbox_file_size "$home/$TUNNEL_LOG")"
+    offset="${offset:-0}"
+
+    start_container "$name" "$home"
 
     if [ "$headless" = 1 ]; then
-        run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} --detach "$image" \
-            /usr/local/bin/sandbox-idle >/dev/null
-        echo "'$name' is running headless. Attach a shell with: sandbox $name"
-        report_tunnel "$name"
+        echo "'$name' is running. Attach a shell with: sandbox $name"
         report_ssh "$name"
+        report_tunnel "$name" "$offset"
         return 0
     fi
 
-    run_container "$name" "$home" ${ssh_args[@]+"${ssh_args[@]}"} --interactive --tty "$image"
+    attach "$name"
+}
+
+same_image() {
+    local ref="$1" digest="$2"
+    if [ -n "$digest" ] && [ -n "$IMAGE_DIGEST" ]; then
+        [ "$digest" = "$IMAGE_DIGEST" ]
+        return
+    fi
+    [ "$ref" = "$IMAGE_REF" ]
 }
 
 create_and_launch() {
-    local name="$1" headless="${2:-0}" ssh_port="${3:-}"
+    local name="$1"
+    shift
     if ! validate_name "$name"; then
         echo "Invalid name: '$name' (use letters, digits, '-', '_'; no leading dot)." >&2
         return 1
     fi
-    launch "$name" "$headless" "$ssh_port"
+    launch "$name" "$@"
 }
 
 remove_container() {
     container stop "$1" >/dev/null 2>&1 || true
     container delete --force "$1" >/dev/null 2>&1 || true
+}
+
+stop_sandbox() {
+    local name
+    name="$(list_sandboxes | gum choose --header 'Stop which sandbox?')" || return 0
+    [ -n "$name" ] || return 0
+    container stop "$name" >/dev/null 2>&1 || true
+    echo "Stopped '$name'. Its home dir and everything in it are kept."
 }
 
 delete_sandbox() {
@@ -170,11 +335,20 @@ rename_sandbox() {
 }
 
 main() {
-    local headless=0 ssh_port=""
+    local headless=0 ssh_port="" image="" pull=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             -h|--help) usage; return 0 ;;
             -d|--headless) headless=1; shift ;;
+            --pull) pull=1; shift ;;
+            --image)
+                shift
+                image="${1:-}"
+                if ! valid_image_ref "$image"; then
+                    echo "Invalid image ref: '$image'." >&2
+                    return 2
+                fi
+                shift ;;
             --ssh-port)
                 shift
                 ssh_port="${1:-}"
@@ -193,24 +367,25 @@ main() {
 
     case "${1:-}" in
         "") ;;
-        *) create_and_launch "$1" "$headless" "$ssh_port"; return $? ;;
+        *) create_and_launch "$1" "$headless" "$ssh_port" "$image" "$pull"; return $? ;;
     esac
 
     ensure_gum || return 1
 
     local names choice
-    local NEW="＋ New sandbox" REN="✎ Rename…" DEL="🗑 Delete container…"
+    local NEW="＋ New sandbox" STOP="⏹ Stop…" REN="✎ Rename…" DEL="🗑 Delete container…"
     names="$(list_sandboxes)"
-    choice="$(printf '%s\n' "$names" "$NEW" "$REN" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
+    choice="$(printf '%s\n' "$names" "$NEW" "$STOP" "$REN" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
 
     case "$choice" in
         "$NEW")
             local name
             name="$(gum input --prompt 'Name: ' --placeholder 'e.g. myproject')" || return 0
-            create_and_launch "$name" "$headless" "$ssh_port" ;;
+            create_and_launch "$name" "$headless" "$ssh_port" "$image" "$pull" ;;
+        "$STOP") stop_sandbox ;;
         "$REN") rename_sandbox ;;
         "$DEL") delete_sandbox ;;
-        *) launch "$choice" "$headless" "$ssh_port" ;;
+        *) launch "$choice" "$headless" "$ssh_port" "$image" "$pull" ;;
     esac
 }
 

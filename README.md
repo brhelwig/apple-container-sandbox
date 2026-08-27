@@ -1,8 +1,8 @@
 # apple-container-sandbox
 
 Ad-hoc Linux sandboxes on [Apple Container](https://github.com/apple/container).
-Each sandbox is a persistent home dir, container, and zellij session keyed by a
-single `<name>`, all sharing one image built from `image/Dockerfile`.
+Each sandbox is a persistent home dir and a container keyed by a single
+`<name>`. It runs a published image — this repo builds nothing.
 
 ## Install
 
@@ -20,17 +20,24 @@ skips the menu and doesn't need `gum` at all.
 ## Usage
 
 ```sh
-sandbox              # menu: launch a sandbox, or create/rename/delete a container
-sandbox myproject    # launch "myproject" (offers to create it if new)
-sandbox -d myproject # launch "myproject" headless — see below
-sandbox --ssh-port 2250 myproject   # serve its SSH on this port of the Mac
+sandbox              # menu: launch a sandbox, or stop/rename/delete one
+sandbox myproject    # launch "myproject" and attach a shell (creates it if new)
+sandbox -d myproject # launch it without attaching anything
+sandbox --image ghcr.io/you/img:tag myproject   # pin it to an image of its own
+sandbox --pull myproject                        # fetch the image again first
+sandbox --ssh-port 2250 myproject               # serve its SSH on this port
 sandbox --help
 ```
 
-Launching a sandbox that already runs attaches a shell to it and leaves it
-running, so background work inside it survives. Where the image changed since
-that sandbox started, `sandbox` says so and asks before it restarts the sandbox
-on the new image. Decline, and it attaches to what is already running.
+**A sandbox keeps running when you leave its shell.** Launches are detached and
+attaching is a separate step, so a build or an agent you start inside one
+survives closing the terminal. Stop one from the menu or with
+`container stop <name>`. That is the only thing that stops it.
+
+Launching a sandbox that already runs attaches to it. Where the image it runs
+has changed since it started, `sandbox` says so and asks before restarting it,
+because a restart loses everything running inside. Decline, and it attaches to
+what is already there.
 
 Deleting removes the container and nothing else. The home dir at
 `~/Sandboxes/<name>` keeps every file in it, so the sandbox stays in the menu
@@ -38,78 +45,70 @@ and the next launch recreates the container. Delete a home dir yourself when you
 want the files gone.
 
 Homes live at `~/Sandboxes/<name>` and are mounted as the container's entire
-home, so auth, config, and shell history persist across image rebuilds and stay
+home, so auth, config, and shell history persist across image changes and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
 
-## Headless
+## Choosing an image
 
-`sandbox -d <name>` launches a sandbox with no terminal attached. The container
-runs detached, the cluster, the [VS Code tunnel](#vs-code-remote-tunnels) and
-the [SSH server](#ssh) start the way they always do, and the launcher waits for
-the tunnel, prints where both stand, and returns your prompt. Close the terminal
-and open the sandbox from VS Code or over `ssh`.
+Every sandbox runs a published OCI image. By default that is
+[`ghcr.io/brhelwig/dev-container`](https://github.com/brhelwig/dev-container),
+which brings a Debian toolchain, Homebrew, zsh with oh-my-zsh, podman, k3s, the
+VS Code CLI, and an entrypoint that starts sshd, a VS Code tunnel, tailscale, a
+podman socket and a background zellij session.
+
+Three ways to change it, most specific first:
 
 ```sh
-sandbox -d myproject       # start it detached, then report the ways in
+sandbox --image ghcr.io/you/img:tag myproject   # this sandbox, from now on
+```
+
+The ref is recorded in `~/Sandboxes/myproject/.sandbox-image` and used on every
+later launch. Delete that file to follow the config again.
+
+```toml
+[image]
+ref = "ghcr.io/you/img:tag"      # every sandbox that has no pin of its own
+```
+
+With neither, sandboxes run `ghcr.io/brhelwig/dev-container:latest-arm64`.
+
+**The launcher asks the image rather than asking you.** The home it mounts over,
+the account SSH tells you to log in as, and the shell it attaches all come from
+the image. It reads the image's OCI config first, and for an image that declares
+none of that — a plain `debian:bookworm`, say — it starts the image once with its
+entrypoint bypassed and asks. That takes about a second, and the answer is
+remembered per sandbox, so it happens once per image.
+
+```sh
+sandbox --image debian:bookworm plain    # works with no configuration at all
+```
+
+**Moving tags drift.** `latest-arm64` is rebuilt weekly, and nothing notices
+until something fetches it. `sandbox --pull <name>` fetches the ref again and
+offers to restart the sandbox if what came down differs from what it is running.
+The comparison is on the image digest, so a ref that resolves to the same image
+under a different spelling doesn't cause a pointless restart.
+
+## Headless
+
+`sandbox -d <name>` launches a sandbox without attaching anything to it. The
+launcher reports the ways in and returns your prompt.
+
+```sh
+sandbox -d myproject       # start it, then report the ways in
 sandbox myproject          # attach a shell whenever you want one
 container stop myproject   # stop it
 ```
 
-A headless launch differs from an ordinary one in two ways only:
+It reports SSH from the Mac's side — the port it published and how many keys
+would be accepted — so a sandbox with no authorized key says so rather than
+coming up silently with no way in. If the image writes a VS Code tunnel log into
+the home as `.code-tunnel.log`, the launcher watches it for up to 30 seconds and
+prints the link. It only reads what this launch wrote, so a link from last week
+is never reported as this one. Set `SANDBOX_TUNNEL_WAIT` to change that budget.
 
-- **No zellij session.** The container runs `sandbox-idle` in its place, which
-  holds it open and exits on the stop signal. Attaching with `sandbox <name>`
-  starts the zellij session then, and leaving that shell no longer stops the
-  sandbox.
-- **The ways in are reported instead of a shell.** The launcher polls
-  `sandbox-code status` inside the sandbox for up to 30 seconds and prints the
-  result, then prints `sandbox-ssh status`, so a sandbox that was never signed in
-  or has no authorized key says so rather than coming up silently with no way in.
-  Set `SANDBOX_TUNNEL_WAIT` to change that budget.
-
-Everything else is the same: same image, same home mount, same capabilities, and
-the container is still removed when it stops.
-
-## Finding your way around a sandbox
-
-A sandbox can describe itself:
-
-```sh
-man sandbox
-```
-
-The page lists the tools installed in this sandbox, says where the home comes
-from and what survives a rebuild, and covers the `sandbox-*` helpers. It is
-written during the image build from the same package lists that install the
-tools, so it describes the image it ships in rather than a list someone keeps
-current by hand. Each freshly launched sandbox prints one line pointing at it.
-
-## Claude in a sandbox
-
-A command that Claude Code runs is niced to 10, put in the idle I/O class, and
-made the first thing the kernel kills if the sandbox runs out of memory. So a
-build or a test Claude starts loses the contest for CPU, disk and memory rather
-than the session losing it — killing a command costs a command, killing claude
-or zellij costs the session.
-
-Claude spawns each command in its own shell, and that shell sets all three on
-itself before the command starts. Every process under it inherits them. A shell
-you type in keeps its own standing, and so do claude and zellij.
-
-The OOM setting goes to the maximum rather than something milder because it
-works from the command's side: each command volunteers itself, so nothing has to
-raise claude's own standing. `ionice` has an effect only under an I/O scheduler
-that implements priority, which is unverified for the Apple Container guest
-kernel; the CPU and memory parts do not depend on it.
-
-Run anything else the same way with `sandbox-background <command>`.
-
-The k3s cluster runs through that wrapper, so k3s and what it runs
-are niced and in the idle I/O class as well. Its OOM score is set rather than
-inherited, because kubelet gives itself one — `deprioritize_server` in
-`image/sandbox-k3s` covers the details. Each pod container keeps the score
-kubelet computes from its quality of service class.
+An ordinary launch differs only in attaching a shell afterwards.
 
 ## Configuring the sandbox (`config.toml`)
 
@@ -121,135 +120,39 @@ tracked **`config.toml.example`**. Start from the template (this is exactly what
 cp config.toml.example config.toml
 ```
 
-Keeping it untracked means editing it never conflicts with `git pull`. Editing
-`config.toml` (or anything in `image/`) changes the image's source hash, so the
-next `sandbox <name>` rebuilds the image and recreates the sandbox on it.
+Keeping it untracked means editing it never conflicts with `git pull`.
 
 ```toml
-[apt]
-packages = ["ripgrep"]                # Debian packages (apt-native, arm64)
-
-[brew]
-taps     = ["hashicorp/tap"]          # taps are tapped AND trusted (so tap casks install)
-formulae = ["ripgrep-all"]            # linuxbrew formulae
-casks    = ["ngrok"]                  # Homebrew casks that ship a Linux build
-
-[post_install]
-commands = [                          # shell run at build time as the sandbox user (+ sudo)
-  "gcloud components install gke-gcloud-auth-plugin --quiet",
-]
+[image]
+ref = "ghcr.io/brhelwig/dev-container:latest-arm64"
 
 [resources]
-memory = "4G"                         # container memory (K/M/G/T/P); omit for the platform default
-cpus   = 4                            # container CPU count; omit for the platform default
+memory = "4G"                    # container memory (K/M/G/T/P); omit for the default
+cpus   = 4                       # container CPU count; omit for the default
 
 [ssh]
-enabled = true                        # serve SSH from every sandbox
-port    = 2222                        # first port to hand out; each sandbox gets its own
-address = "0.0.0.0"                   # every address of the Mac; "127.0.0.1" for the Mac alone
-
-[k3s]
-autostart = false                     # start the cluster at launch; otherwise sandbox-k3s up
-disk      = "8G"                      # sparse ext4 image holding cluster state
-node_ip   = "10.99.0.1"               # fixed node address; must not collide with your LAN
+enabled = true                   # publish a port for every sandbox
+port    = 2222                   # first port to hand out; each sandbox gets its own
+address = "0.0.0.0"              # every address of the Mac; "127.0.0.1" for the Mac alone
 ```
 
-- **These sections add to the base set, they don't replace it.** Every sandbox
-  installs the same tools no matter what is in here — `gh`, `node`, gcloud,
-  terraform, `cloudflared` and the rest, listed under
-  [What's in the base image](#whats-in-the-base-image). `config.toml` is for what
-  you want on top of that.
-- Prefer **apt** for stable, arch-native packages; **brew formulae** for current
-  dev tooling; **casks** for prebuilt binaries (they must have a Linux build).
-- A tap-provided formula/cask uses its fully-qualified name (e.g.
-  `hashicorp/tap/terraform`) once its tap is listed in `taps`.
-- `[post_install]` is for anything that isn't a package — component installs,
-  downloading a binary or AppImage, etc. It runs after all installs and **fails
-  the build** on error.
+- `[image].ref` picks what every sandbox runs — see
+  [Choosing an image](#choosing-an-image). It is the only image setting, because
+  everything else about an image comes from the image.
 - `[resources]` sets each sandbox's memory and CPU (passed to `container run`).
-  Omit a value to use Apple Container's default (~1 GiB memory). Changing these
-  rebuilds the image on next launch, so the new limits take effect on a fresh
-  container.
-- `[ssh]` decides whether every sandbox serves SSH, which port each one gets,
-  and which address of the Mac that port is open on — see [SSH](#ssh) below.
-- `[k3s]` sizes and addresses the cluster, and `autostart` decides whether it
-  comes up at launch — see [Kubernetes](#kubernetes-k3s) below.
-
-## Kubernetes (k3s)
-
-Each sandbox can run its own single-node cluster. k3s is installed in every
-sandbox but stays stopped until you ask for it, so a sandbox you use for
-anything else costs nothing to keep. `kubectl`, `helm`, `k9s` and friends come
-from `BREW_FORMULAE`, and the cluster shows up in your kubeconfig as a `k3s`
-context once it's ready.
-
-```sh
-sandbox-k3s up        # start the cluster
-sandbox-k3s status    # node + pod summary, or why it isn't up yet
-sandbox-k3s down      # stop the cluster (state is kept)
-```
-
-Set `autostart = true` under `[k3s]` in `config.toml` to have every sandbox
-start the cluster at launch instead. The launch hook doesn't wait for it, so you
-still get a shell immediately, and a cluster that fails to come up costs you the
-cluster rather than the shell.
-
-### Your kubeconfig
-
-The cluster is added alongside whatever is already in `~/.kube/config`; nothing
-there is modified, so remote clusters keep working next to the local one.
-
-`KUBECONFIG` points into `/var/lib/sandbox/kube`, not straight at `~/.kube`,
-because kubectl cannot take its lock file on the sandbox home — `image/sandbox-kubeconfig`
-explains why. That directory's `config` entry symlinks to `~/.kube/config`, so
-your kubeconfig still lands in the home and survives the container. Run
-`sandbox-kubeconfig` to rebuild it by hand.
-
-Bring-up takes roughly 30 s and ~800 MB of RAM. `sandbox-k3s up` returns as soon
-as the server is launched and the cluster converges behind you, so watch it with
-`sandbox-k3s status` and read `/var/log/k3s.log` if it never comes up.
-
-**Cluster state persists.** It lives on a sparse ext4 image
-(`~/Sandboxes/<name>/.sandbox-k3s.img`) that is loop-mounted inside the
-container, so your workloads, cached images, and cluster objects survive
-container recreation and image rebuilds. `disk` is a ceiling, not an
-allocation — an `8G` image occupies ~1.5 GB of real disk with a cluster running.
-The state can't live on the home dir directly because that's a virtiofs mount,
-where `mknod` is denied and so overlayfs whiteouts are impossible.
-
-To grow a disk later, stop the cluster and, in the sandbox,
-`truncate -s <bigger> ~/.sandbox-k3s.img` then `resize2fs` it after remounting.
-To start over, `sandbox-k3s down` and delete the image file.
-
-A few consequences worth knowing:
-
-- **Every sandbox can run one** — each with its own cluster and disk. A sandbox
-  where the cluster never starts pays neither the memory nor the startup cost,
-  which is why `autostart` is off by default.
-- **Needs `[resources].memory` of at least 4G.** Apple Container's ~1 GiB
-  default is not enough for the control plane.
-- **k3s is unpinned**, tracking the stable channel like the Homebrew formulae
-  do, so two rebuilds can install different k3s versions.
-- **The node IP is fixed** rather than the container's DHCP address, which
-  changes on every recreation and would otherwise break the persisted cluster.
-- `modprobe` warnings in the k3s log are expected — the kernel is monolithic and
-  already has everything built in.
+  Omit a value to use Apple Container's default (~1 GiB memory).
+- `[ssh]` decides whether every sandbox serves SSH, which port each one gets, and
+  which address of the Mac that port is open on — see [SSH](#ssh).
 
 ## SSH
 
-Every sandbox runs an SSH server. It comes up at launch, next to the
-[VS Code tunnel](#vs-code-remote-tunnels) rather than in place of it, so both
-ways in work at once and a tunnel that stops relaying doesn't lock you out.
+Every sandbox gets a port on the Mac and the launcher seeds its authorized keys.
+Serving SSH on the inside is the image's job; `dev-container` starts sshd at
+launch.
 
-```sh
-sandbox-ssh status   # keys authorized, and the command that reaches this sandbox
-sandbox-ssh up       # start it (the launch already did)
-sandbox-ssh down     # stop it; the host key and the keys stay
-```
-
-**A key is the only way in.** The account has no password, and the server
-refuses password logins and root logins. The launcher copies every `*.pub` in
-your Mac's `~/.ssh`, plus every key already in your Mac's own
+**A key is the only way in**, assuming the image's sshd is configured that way —
+`dev-container`'s refuses passwords and root logins. The launcher copies every
+`*.pub` in your Mac's `~/.ssh`, plus every key already in your Mac's own
 `~/.ssh/authorized_keys`, into a sandbox the first time it creates the home, so
 usually there is nothing to set up — this also covers hardware-backed keys
 (security keys, agent-only keys) that never leave a `.pub` file lying around.
@@ -257,99 +160,42 @@ To authorize another key, append it to `~/Sandboxes/<name>/.ssh/authorized_keys`
 — that file is the sandbox's `~/.ssh/authorized_keys`, so you can write it from
 either side. If your Mac has no key yet, `ssh-keygen -t ed25519` makes one.
 
-**One port per sandbox.** The launcher publishes the sandbox's port 22 on a port
+**One port per sandbox.** The launcher publishes the sandbox's SSH port on a port
 of the Mac that belongs to that sandbox alone, so every sandbox can serve SSH at
 the same time. Ports are handed out from `[ssh].port` upward, recorded in
 `~/Sandboxes/<name>/.sandbox-ssh-port`, and kept for the life of the home. Name
 one yourself with `sandbox --ssh-port <port> <name>`.
 
+**Log in as the image's user, not yours.** `sandbox -d` prints the exact command;
+for `dev-container` that is `ssh -p <port> dev@127.0.0.1`.
+
 **It is reachable from other machines.** The port is open on every address the
 Mac has, so a tailnet, the LAN, or anything else that reaches the Mac reaches the
 sandbox at that port. Set `[ssh].address = "127.0.0.1"` to narrow it to the Mac
-itself, or `[ssh].enabled = false` to turn the server off. See
+itself, or `[ssh].enabled = false` to turn it off. See
 [Security scope](#security-scope).
 
-```sh
-ssh -p 2222 you@127.0.0.1      # from the Mac
-ssh -p 2222 you@my-mac         # from a tailnet, LAN, or anywhere else
-```
-
-**The host key survives the container.** It lives in `~/.sandbox-ssh`, in the
-sandbox home, so recreating the container or rebuilding the image doesn't change
-the fingerprint and `ssh` never warns that the host changed.
-
-Because `sftp` is served too, `scp`, `rsync`, and VS Code's Remote-SSH work the
-same way. A logged-in session gets the same `PATH` as a shell in the sandbox, so
-`ssh <sandbox> kubectl get pods` finds the tools.
+**The host key survives the container** as long as the image keeps it in the
+home. `dev-container` puts it in `~/.ssh-host-keys`, which is the bind-mounted
+sandbox home, so recreating the container doesn't change the fingerprint and
+`ssh` never warns that the host changed.
 
 ## VS Code (Remote Tunnels)
 
-Each sandbox gets the VS Code CLI plus `sandbox-code`, which runs the sandbox as
-a
-[Remote Tunnel](https://code.visualstudio.com/docs/remote/tunnels). The tunnel
-dials out to the VS Code tunnel service, so nothing listens inside the sandbox
-and no port is published on your Mac.
-
-Sign in once per sandbox, then open it from VS Code Desktop (Remote Explorer,
-with the Remote Tunnels extension) or from vscode.dev:
+Running a tunnel is the image's job. `dev-container` ships the VS Code CLI and
+starts a tunnel at launch once you have signed in, keeping the credentials and
+the downloaded server under `~/.vscode` — the bind-mounted sandbox home — so one
+sign-in survives container recreation. Sign in from inside the sandbox:
 
 ```sh
-sandbox-code login     # GitHub or Microsoft account; asks which
-sandbox-code up        # start the tunnel
-sandbox-code status    # tunnel name, its link once the log carries one, or why it isn't up
-sandbox-code down      # stop the tunnel (the sign-in is kept)
+code tunnel user login
 ```
 
-After the first sign-in there is nothing to repeat: launching the sandbox starts
-the tunnel for you. The credentials and the server VS Code downloads live in
-`~/.vscode`, which is the bind-mounted sandbox home, so both survive container
-recreation and image rebuilds. A sandbox that has never been signed in prints
-the `sandbox-code login` line at launch and carries on to a shell.
+The launcher's part is only to report the link on a headless launch, which it
+reads out of `.code-tunnel.log` in the sandbox home.
 
-To use the tunnel without keeping a terminal open, launch the sandbox
-[headless](#headless).
-
-A few consequences worth knowing:
-
-- **The CLI is in every sandbox**, and a tunnel starts in each one you have
-  signed in.
-- **The tunnel is named after the sandbox**, lowercased, with anything outside
-  letters, digits and hyphens replaced by a hyphen. Whatever the tunnel service
-  makes of a name lands in `~/.sandbox-code.log`, which `sandbox-code status`
-  tails when the tunnel isn't up.
-- **An account holds ten tunnels.** Registering an eleventh deletes an unused
-  one at random, and every sandbox you sign in registers one of the ten.
-- **The CLI is unpinned**, tracking the stable channel like k3s and the Homebrew
-  formulae, so two rebuilds can install different versions.
-- **A running tunnel is remote access to the sandbox** — see "Security scope"
-  below.
-
-## What's in the base image
-
-Every sandbox runs the same image, built from `image/Dockerfile`:
-
-- **Debian bookworm** (arm64) with a base toolchain: `build-essential`,
-  `ca-certificates`, `curl`, `file`, `git`, `git-lfs`, `gnupg`, `locales`,
-  `man-db` (reads `man sandbox`), `openssh-server` (serves [SSH](#ssh)),
-  `procps`, `python3` (parses `config.toml`), `sudo`, `unzip`, `zsh`.
-- **Homebrew (linuxbrew)** under `/home/linuxbrew` (survives the runtime home
-  mount).
-- A **non-root user** (UID matched to your host for bind-mount ownership) with
-  passwordless `sudo`, `zsh` + oh-my-zsh, and a `📦 <name>` prompt showing the
-  sandbox name.
-- **podman** wired for rootful use via a `sudo podman` shim.
-- A launcher that drops you into a zellij session named after the sandbox.
-- A `sandbox(7)` man page written at build time from the same package lists that
-  install the tools, and a line at launch pointing at it.
-- Commands run by Claude Code treated as background work — see
-  [Claude in a sandbox](#claude-in-a-sandbox).
-
-The tools every sandbox gets (`gh`, `node`, gcloud, terraform, `cloudflared`, …)
-are build arguments in the same file: `APT_PACKAGES`, `BREW_TAPS`,
-`BREW_FORMULAE` and `BREW_CASKS`. Edit a list there and the next
-`sandbox <name>` rebuilds the image with it, for every sandbox on that Mac.
-`config.toml` adds to these lists per machine — it never takes anything out of
-them.
+A running tunnel is a way into the sandbox from outside the machine — see
+[Security scope](#security-scope).
 
 ## Security scope
 
@@ -371,31 +217,30 @@ and does not protect:
   from macOS — but a sandbox still runs your code with full network and your
   mounted home. It is not a jail for untrusted code.
 - **Every sandbox runs without capability limits.** Apple Container's standard
-  capability set withholds `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. k3s needs both
-  (mounts, cgroup delegation, iptables, network namespaces), so every sandbox
-  runs with `--cap-add ALL`, and its startup remounts `/proc/sys` read-write and
-  rewrites cgroup delegation. Code in a sandbox is effectively root over that VM
-  — still contained by the VM boundary, but with none of the in-guest restraint
-  a capability-limited container has.
-
-- **A tunnel is a way in from outside the machine.** A running
-  tunnel means anyone signed in to that GitHub or Microsoft account can open the
-  sandbox — its files and a terminal in it — from any machine, and the
-  connection is relayed by a third-party service rather than staying on your
-  network. The credentials that keep it running are plain files in the sandbox
-  home. Stop it with `sandbox-code down`, and sign out with
-  `code tunnel user logout`.
-
+  capability set withholds `CAP_SYS_ADMIN` and `CAP_NET_ADMIN`. Every sandbox
+  runs with `--cap-add ALL` instead, so an image that wants to run nested
+  containers or a Kubernetes cluster can. Code in a sandbox is effectively root
+  over that VM — still contained by the VM boundary, but with none of the
+  in-guest restraint a capability-limited container has.
+- **You are running someone else's image.** Whatever the ref resolves to runs
+  with those capabilities, your mounted home, and a published port. A moving tag
+  means the code changes under you between launches. Pin a digest
+  (`--image name@sha256:…`) where that matters.
+- **A tunnel is a way in from outside the machine.** A running tunnel means
+  anyone signed in to that GitHub or Microsoft account can open the sandbox — its
+  files and a terminal in it — from any machine, and the connection is relayed by
+  a third-party service rather than staying on your network. The credentials that
+  keep it running are plain files in the sandbox home.
 - **SSH is a way in from outside the machine too, and it is on by default.**
   Each sandbox's port is open on **every** address your Mac has, so anything that
   reaches the Mac — the LAN, a tailnet, the internet where the Mac is exposed to
   it — can try that port. What stands in the way is the key: a login needs a
-  private key matching a line of `~/Sandboxes/<name>/.ssh/authorized_keys`, and
-  passwords and root logins are refused. The launcher seeds that file with your
-  Mac's own public keys, so whoever holds a key on your Mac can already get in.
-  Narrow the port to the Mac with `[ssh].address = "127.0.0.1"`, turn the server
-  off everywhere with `[ssh].enabled = false`, or stop it in one sandbox with
-  `sandbox-ssh down`.
+  private key matching a line of `~/Sandboxes/<name>/.ssh/authorized_keys`. The
+  launcher seeds that file with your Mac's own public keys, so whoever holds a key
+  on your Mac can already get in. Whether passwords and root logins are refused
+  is the image's sshd config, not this repo's — check the image you run. Narrow
+  the port to the Mac with `[ssh].address = "127.0.0.1"`, or turn the server off
+  with `[ssh].enabled = false`.
 
 **Bottom line: a sandbox is only as secure as the host it runs on.** Don't put
 secrets in a sandbox you wouldn't put on the host, and don't run untrusted code
@@ -407,8 +252,6 @@ expecting containment.
 bash test/run.sh
 ```
 
-Every push also runs these on GitHub Actions, alongside ShellCheck, hadolint,
-and a Docker build of `image/Dockerfile` — the build that catches a tap,
-formula, or cask breaking. Launching a real sandbox
-isn't covered: Apple Container needs the Virtualization framework, which hosted
-runners can't provide.
+Every push also runs these on GitHub Actions alongside ShellCheck. Launching a
+real sandbox isn't covered: Apple Container needs the Virtualization framework,
+which hosted runners can't provide.

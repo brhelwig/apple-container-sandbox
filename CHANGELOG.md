@@ -4,6 +4,67 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 
 ## Unreleased
 
+### Changed
+- Sandboxes run a published image instead of one built here. The default is
+  `ghcr.io/brhelwig/dev-container:latest-arm64`; `[image].ref` changes it for
+  every sandbox, and `sandbox --image <ref> <name>` pins one sandbox to a ref of
+  its own, recorded in `~/Sandboxes/<name>/.sandbox-image`. Delete that file to
+  follow the config again.
+- The launcher asks the image rather than assuming things about it, or asking
+  you. The home it mounts over, the account SSH names, and the shell it attaches
+  come from the image's OCI config, and for an image that declares none of them
+  it starts the image once with the entrypoint bypassed and asks. So the mount
+  target is never assumed to be `/home/$USER`, and `sandbox --image
+  debian:bookworm plain` works with no configuration at all. The answer is
+  remembered per sandbox in `.sandbox-image-facts`.
+- Attaching joins a zellij session named after the sandbox where the image has
+  zellij, and drops into the image's login shell where it does not.
+- `[image].ref` is the only image setting. Everything else about an image comes
+  from the image.
+- **A sandbox no longer stops when you leave its shell.** Every launch is
+  detached and attaching is a separate `container exec`, so background work
+  survives leaving the shell rather than only surviving a headless launch. Stop
+  one from the new `⏹ Stop…` menu entry or with `container stop <name>`.
+- The restart prompt compares image digests, not source hashes. `sandbox --pull
+  <name>` fetches the ref again first, which is how drift in a moving tag like
+  `latest-arm64` gets noticed.
+- Headless launches report SSH from the Mac's side rather than by running a
+  command inside the sandbox, and read the VS Code tunnel link only from what the
+  current launch wrote, so a link from an earlier launch is never reported as
+  this one.
+
+### Removed
+- `image/` and everything in it: the Dockerfile, the entrypoint, and the
+  `sandbox-*` helpers. [brhelwig/dev-container#37](https://github.com/brhelwig/dev-container/issues/37)
+  tracks moving those helpers into the image that now runs every sandbox,
+  combined into one `sandbox` command with a menu. Until it lands, these are
+  gone: `man 7 sandbox`; `sandbox-k3s` and the `[k3s]` config; the
+  `/var/lib/sandbox/kube` `KUBECONFIG` shim; `sandbox-code`; `sandbox-ssh`;
+  `sandbox-background` and niceing the commands Claude Code runs; the
+  `📦 <name>` prompt and the launch welcome line.
+- `bin/sandbox-build` and `bin/sandbox-src-hash`, with the content-hash image
+  tag, the image pruning and the Rosetta bootstrap prompt.
+- `[apt]`, `[brew]` and `[post_install]`. Adding a package now means changing the
+  image, not this repo.
+
+### Upgrading
+Three things to run once. Nothing does them for you.
+
+1. The old locally-built images are no longer pruned by anything:
+   ```sh
+   container image ls | awk '/^sandbox /{print "sandbox:" $2}' | xargs -n1 container image delete
+   ```
+2. The k3s state disks are orphaned multi-GB files now that nothing mounts them:
+   ```sh
+   rm -f ~/Sandboxes/*/.sandbox-k3s.img
+   ```
+3. `dev-container` keeps its SSH host key at `~/.ssh-host-keys` rather than
+   `~/.sandbox-ssh`, so **every existing sandbox's fingerprint changes once** and
+   `ssh` will refuse to connect until you clear the old one:
+   ```sh
+   for p in ~/Sandboxes/*/.sandbox-ssh-port; do ssh-keygen -R "[127.0.0.1]:$(cat "$p")"; done
+   ```
+
 ### Added
 - Every sandbox serves SSH. `openssh-server` joins the base toolchain, and
   `sandbox-ssh up|down|status` runs it; the launch starts it, next to the VS
