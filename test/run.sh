@@ -193,6 +193,18 @@ cat > "$CSTUB/container" <<'STUBEOF'
 printf '%s\n' "$*" >> "$CMD_LOG"
 [ "$1 $2" = "run --detach" ] && printf '%s\n' "$@" > "$RUN_LOG"
 [ -n "${IMG_ENV+set}" ] || IMG_ENV='"HOME=/home/dev","SHELL=/usr/bin/zsh"'
+if [ "$1" = exec ]; then
+    case " $* " in
+        *" tic "*)
+            cat > /dev/null
+            exit "${TIC_STATUS:-0}"
+            ;;
+        *" infocmp "*)
+            [ -n "${TERMINFO_MISSING:-}" ] && ! grep -q " tic " "$CMD_LOG" && exit 1
+            exit 0
+            ;;
+    esac
+fi
 case "$1 $2" in
     "run --rm")
         printf '%s\n%s\n%s\n' "${PROBE_HOME-/home/probed}" \
@@ -242,7 +254,12 @@ cat > "$CSTUB/gum" <<'STUBEOF'
 #!/usr/bin/env bash
 exit "${GUM_CONFIRM:-1}"
 STUBEOF
-chmod +x "$CSTUB/container" "$CSTUB/gum"
+cat > "$CSTUB/infocmp" <<'STUBEOF'
+#!/usr/bin/env bash
+[ -n "${HOST_INFOCMP_FAILS:-}" ] && exit 1
+echo "$*|"
+STUBEOF
+chmod +x "$CSTUB/container" "$CSTUB/gum" "$CSTUB/infocmp"
 
 DEFAULT_IMAGE='ghcr.io/brhelwig/dev-container:latest-arm64'
 
@@ -381,6 +398,26 @@ ok 'grep -q "command -v zellij" "$TMP/cmd.log"'     'attach: only where the imag
 ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: otherwise the shell the image names'
 IMG_ENV='"HOME=/home/dev"' PROBE_SHELL=/bin/sh run_launch noshell
 ok 'grep -q "/bin/sh -l" "$TMP/cmd.log"'            'attach: asks the image when it names no shell'
+
+export TERM=xterm-256color
+run_launch knownterm
+ok 'grep -q "TERM=xterm-256color" "$TMP/cmd.log"'   'terminal: attaches with the terminal you are using'
+no 'grep -q " tic " "$TMP/cmd.log"'                 'terminal: imports nothing the sandbox already knows'
+
+export TERM=xterm-ghostty TERMINFO_MISSING=1
+run_launch importterm
+ok 'grep -q "tic -x -o /home/dev/.terminfo" "$TMP/cmd.log"' \
+                                                    'terminal: teaches the sandbox a terminal it does not know'
+ok 'grep -q "TERM=xterm-ghostty" "$TMP/cmd.log"'    'terminal: then attaches with that terminal'
+
+TIC_STATUS=1 run_launch fallbackterm
+ok 'grep -q "TERM=xterm-256color" "$TMP/cmd.log"'   'terminal: falls back to one every image knows'
+ok 'grep -q "does not know xterm-ghostty" "$TMP/out.txt"' \
+                                                    'terminal: says so when it falls back'
+
+HOST_INFOCMP_FAILS=1 run_launch nodescription
+ok 'grep -q "TERM=xterm-256color" "$TMP/cmd.log"'   'terminal: falls back when this Mac cannot describe it either'
+unset TERM TERMINFO_MISSING
 
 mkdir -p "$TMP/homes/tunnelbox"
 printf 'open https://old.tunnel.example/x\n' > "$TMP/homes/tunnelbox/.code-tunnel.log"

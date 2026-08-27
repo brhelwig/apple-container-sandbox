@@ -47,6 +47,17 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 - `[apt]`, `[brew]` and `[post_install]`. Adding a package now means changing the
   image, not this repo.
 
+### Fixed
+- Line editing works in a sandbox opened from a terminal the image has never
+  heard of. The launcher used to hand the sandbox the Mac's `TERM` and hope the
+  image could describe it; Debian describes `xterm-256color` and a short list of
+  others, so Ghostty, kitty, WezTerm and Alacritty left zsh with no terminal
+  description and a backspace key that did nothing. The launcher now asks the
+  sandbox whether it knows the terminal, teaches it the description from the Mac
+  where it does not, and attaches with `xterm-256color` where neither works. The
+  description is compiled into `~/Sandboxes/<name>/.terminfo`, so it is learned
+  once and an SSH login into that sandbox gets it too.
+
 ### Upgrading
 Three things to run once. Nothing does them for you.
 
