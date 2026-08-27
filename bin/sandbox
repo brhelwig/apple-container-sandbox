@@ -126,14 +126,31 @@ running_now() {
     [ "$(sandbox_running_image "$1" 2>/dev/null | sed -n 3p)" = "running" ]
 }
 
-# Nothing injects TERM, so without this zellij and vim draw on a dumb terminal.
-# zellij keeps the session alive between attaches; images without it get a
-# plain login shell.
+terminfo_for() {
+    local name="$1" term="${TERM:-xterm-256color}"
+
+    if container exec "$name" infocmp "$term" >/dev/null 2>&1; then
+        printf '%s\n' "$term"
+        return
+    fi
+
+    if infocmp -x "$term" 2>/dev/null \
+        | container exec --interactive "$name" \
+            tic -x -o "$IMAGE_HOME/.terminfo" - >/dev/null 2>&1 \
+        && container exec "$name" infocmp "$term" >/dev/null 2>&1; then
+        printf '%s\n' "$term"
+        return
+    fi
+
+    echo "'$name' does not know $term, and this Mac cannot describe it. Using xterm-256color." >&2
+    printf '%s\n' "xterm-256color"
+}
+
 attach() {
     local name="$1"
 
     container exec --interactive --tty \
-        --env "TERM=${TERM:-xterm-256color}" \
+        --env "TERM=$(terminfo_for "$name")" \
         "$name" "$IMAGE_SHELL" -lc \
         "command -v zellij >/dev/null 2>&1 && exec zellij attach --create $name; exec $IMAGE_SHELL -l" \
         || true
