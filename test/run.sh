@@ -458,30 +458,39 @@ STUBEOF
 cat > "$DSTUB/gum" <<'STUBEOF'
 #!/usr/bin/env bash
 case "$*" in
-    *"Sandbox:"*)                  cat > /dev/null; echo "🗑 Delete container…" ;;
-    *"which sandbox's container"*) cat > /dev/null; echo "$DELETE_NAME" ;;
-    confirm*)                      exit "$GUM_CONFIRM" ;;
+    *"Sandbox:"*)            cat > /dev/null; echo "🗑 Delete…" ;;
+    *"Delete which sandbox"*) cat > /dev/null; echo "$DELETE_NAME" ;;
+    confirm*)                exit "$GUM_CONFIRM" ;;
 esac
 STUBEOF
-chmod +x "$DSTUB/container" "$DSTUB/gum"
+cat > "$DSTUB/osascript" <<'STUBEOF'
+#!/usr/bin/env bash
+exit 1
+STUBEOF
+chmod +x "$DSTUB/container" "$DSTUB/gum" "$DSTUB/osascript"
 
 DHOME="$SANDBOX_HOMES/deleteme"
 mkdir -p "$DHOME"
 echo 'work' > "$DHOME/keepme"
 
+DTRASH="$TMP/deletetrash"
+
 run_delete() {
     rm -f "$TMP/delete.log"
     DELETE_LOG="$TMP/delete.log" DELETE_NAME=deleteme GUM_CONFIRM="$1" \
+        SANDBOX_TRASH="$DTRASH" \
         PATH="$DSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" >/dev/null 2>&1
 }
 
-run_delete 0
-ok 'grep -q "delete --force deleteme" "$TMP/delete.log"' 'delete: deletes the container'
-ok '[ -f "$DHOME/keepme" ]'                              'delete: keeps what is in the home dir'
-ok '[ -d "$DHOME" ]'                                     'delete: keeps the home dir'
-
 run_delete 1
 ok '[ ! -e "$TMP/delete.log" ]'                          'delete: declined -> touches nothing'
+ok '[ -f "$DHOME/keepme" ]'                              'delete: declined -> the home dir stays'
+
+run_delete 0
+ok 'grep -q "delete --force deleteme" "$TMP/delete.log"' 'delete: deletes the container'
+ok '[ ! -e "$DHOME" ]'                                   'delete: the home dir leaves ~/Sandboxes'
+no 'list_sandboxes | grep -qx deleteme'                  'delete: the sandbox leaves the menu'
+ok '[ -f "$DTRASH/deleteme/keepme" ]'                    'delete: the files are in the Trash, not gone'
 
 STOPSTUB="$TMP/stopstub"
 mkdir -p "$STOPSTUB"
@@ -505,6 +514,85 @@ DELETE_LOG="$TMP/delete.log" STOP_NAME=stopme \
 ok 'grep -qx "stop stopme" "$TMP/delete.log"'            'stop: stops the container'
 no 'grep -q "delete" "$TMP/delete.log"'                  'stop: deletes nothing'
 ok '[ -f "$SHOME/keepme" ]'                              'stop: keeps what is in the home dir'
+
+TRSTUB="$TMP/trstub"
+mkdir -p "$TRSTUB"
+cat > "$TRSTUB/osascript" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "${!#}" >> "$OSA_LOG"
+exit "${OSA_EXIT:-0}"
+STUBEOF
+chmod +x "$TRSTUB/osascript"
+
+TRASH="$TMP/trash"
+trash_it() {
+    rm -f "$TMP/osa.log"
+    (
+        export OSA_LOG="$TMP/osa.log" OSA_EXIT="$1"
+        export SANDBOX_TRASH="$TRASH" PATH="$TRSTUB:$PATH"
+        sandbox_trash "$2"
+    )
+}
+
+TBOX="$TMP/trashme"
+mkdir -p "$TBOX"; echo 'work' > "$TBOX/keepme"
+ok 'trash_it 0 "$TBOX"'                        'trash: Finder takes it'
+ok 'grep -qx "$TBOX" "$TMP/osa.log"'           'trash: hands Finder the path as an argument'
+no '[ -e "$TRASH" ]'                           'trash: no move of its own once Finder has it'
+
+ok 'trash_it 1 "$TBOX"'                        'trash: Finder refused -> moves it instead'
+ok '[ -f "$TRASH/trashme/keepme" ]'            'trash: the files arrive intact'
+no '[ -e "$TBOX" ]'                            'trash: and leave where they were'
+
+mkdir -p "$TBOX"; echo 'second' > "$TBOX/keepme"
+ok 'trash_it 1 "$TBOX"'                        'trash: a name already in the Trash is no error'
+ok '[ "$(cat "$TRASH/trashme/keepme")" = work ]'   'trash: the one already there is untouched'
+ok '[ "$(cat "$TRASH/trashme 2/keepme")" = second ]' 'trash: the second lands beside it'
+no '[ -e "$TRASH/trashme/trashme" ]'           'trash: and is not buried inside the first'
+
+ok 'trash_it 1 "$TMP/never-existed"'           'trash: nothing to trash is not a failure'
+
+RSTUB="$TMP/rstub"
+mkdir -p "$RSTUB"
+cp "$CSTUB/container" "$RSTUB/container"
+cat > "$RSTUB/gum" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$*" in
+    *"Sandbox:"*)           cat > /dev/null; echo "↺ Reset image…" ;;
+    *"Reset which sandbox"*) cat > /dev/null; echo "$RESET_NAME" ;;
+    confirm*)               exit "$GUM_CONFIRM" ;;
+esac
+STUBEOF
+chmod +x "$RSTUB/container" "$RSTUB/gum"
+
+RHOMES="$TMP/rhomes"
+RHOME="$RHOMES/resetme"
+
+run_reset() {
+    rm -rf "$RHOMES"
+    mkdir -p "$RHOME"
+    echo 'work' > "$RHOME/keepme"
+    printf 'pinned/img:1\n' > "$RHOME/.sandbox-image"
+    printf 'sha256:stale\n/home/pinned\npinneduser\n/bin/pinnedsh\n' > "$RHOME/.sandbox-image-facts"
+    rm -f "$TMP/run.log" "$TMP/cmd.log"
+    env RUN_LOG="$TMP/run.log" CMD_LOG="$TMP/cmd.log" \
+        SANDBOX_HOMES="$RHOMES" SANDBOX_TUNNEL_WAIT=0 \
+        SANDBOX_HOST_SSH_DIR="$HOSTKEYS" RESET_NAME=resetme GUM_CONFIRM="$1" \
+        PATH="$RSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" -d >/dev/null 2>&1
+}
+
+run_reset 1
+ok '[ "$(cat "$RHOME/.sandbox-image")" = "pinned/img:1" ]' 'reset: declined -> the pin stays'
+no '[ -s "$TMP/run.log" ]'                          'reset: declined -> starts nothing'
+
+run_reset 0
+no '[ -e "$RHOME/.sandbox-image" ]'                 'reset: drops the pinned ref'
+ok 'grep -q "^image pull" "$TMP/cmd.log"'           'reset: fetches the ref again'
+ok 'grep -qx "delete --force resetme" "$TMP/cmd.log"' 'reset: removes the container'
+ok 'grep -qx "$DEFAULT_IMAGE" "$TMP/run.log"'       'reset: starts it on the config ref'
+no 'grep -qx "pinned/img:1" "$TMP/run.log"'         'reset: not on the ref it was pinned to'
+ok '[ -f "$RHOME/keepme" ]'                         'reset: keeps what is in the home dir'
+ok 'grep -q "^sha256:aaa$" "$RHOME/.sandbox-image-facts"' 'reset: the stale facts are replaced'
 
 echo "----"
 echo "$pass passed, $fail failed"

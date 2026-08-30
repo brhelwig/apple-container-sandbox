@@ -1,4 +1,5 @@
 : "${SANDBOX_HOMES:=$HOME/Sandboxes}"
+: "${SANDBOX_TRASH:=$HOME/.Trash}"
 
 sandbox_config() {
     [ -r "$1" ] || { printf '%s\n' "$4"; return 0; }
@@ -324,6 +325,27 @@ sandbox_tunnel_url() {
 sandbox_file_size() {
     [ -f "$1" ] || { printf '0\n'; return 0; }
     wc -c < "$1" 2>/dev/null | tr -d ' ' || printf '0\n'
+}
+
+sandbox_trash() {
+    local path="$1" dest copy
+    [ -e "$path" ] || return 0
+
+    if command -v osascript >/dev/null 2>&1 && osascript \
+        -e 'on run argv' \
+        -e 'tell application "Finder" to delete POSIX file (item 1 of argv)' \
+        -e 'end run' "$path" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    mkdir -p "$SANDBOX_TRASH" || return 1
+    dest="$SANDBOX_TRASH/$(basename "$path")"
+    if [ -e "$dest" ]; then
+        copy=2
+        while [ -e "$dest $copy" ]; do copy=$((copy + 1)); done
+        dest="$dest $copy"
+    fi
+    mv "$path" "$dest"
 }
 
 list_sandboxes() {

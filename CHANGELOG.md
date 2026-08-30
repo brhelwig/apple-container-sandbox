@@ -5,11 +5,24 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Changed
+- **Deleting a sandbox deletes the sandbox.** It removed the container and left
+  the home dir, and because the menu is built from the directories under
+  `~/Sandboxes`, the sandbox stayed in the menu and delete read as doing nothing.
+  It reported success either way, and with `--rm` there is no container left to
+  delete once a sandbox is stopped, so on a stopped sandbox it always did nothing
+  and always said it worked. Delete now removes the container and puts
+  `~/Sandboxes/<name>` in the Trash, so the entry leaves the menu and the files
+  are recoverable until the Trash is emptied. Finder does the move where it can,
+  which keeps **Put Back**; a plain move into `~/.Trash` covers the rest.
+  `⏹ Stop…` is still the one that keeps everything.
+- A new `↺ Reset image…` menu entry drops the ref pinned to one sandbox by
+  `--image`, fetches `[image].ref` from config.toml, and recreates the container
+  on it. The home dir is untouched. This replaces deleting
+  `~/Sandboxes/<name>/.sandbox-image` by hand.
 - Sandboxes run a published image instead of one built here. The default is
   `ghcr.io/brhelwig/dev-container:latest-arm64`; `[image].ref` changes it for
   every sandbox, and `sandbox --image <ref> <name>` pins one sandbox to a ref of
-  its own, recorded in `~/Sandboxes/<name>/.sandbox-image`. Delete that file to
-  follow the config again.
+  its own, recorded in `~/Sandboxes/<name>/.sandbox-image`.
 - The launcher asks the image rather than assuming things about it, or asking
   you. The home it mounts over, the account SSH names, and the shell it attaches
   come from the image's OCI config, and for an image that declares none of them
