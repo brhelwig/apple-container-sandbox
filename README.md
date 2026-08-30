@@ -56,8 +56,9 @@ files into `~/Sandboxes/<name>` in Finder.
 That mount covers whatever the image left in its own home, so the first launch
 copies the image's home into `~/Sandboxes/<name>` first. Without it a sandbox on
 the default image starts with no `.zshrc` and no oh-my-zsh, and zsh opens its
-new-user setup instead of a shell. A file you already have is never overwritten,
-and the copy runs once per sandbox, recorded in `.sandbox-seeded`.
+new-user setup instead of a shell. A file you already have is never overwritten.
+The copy runs once per image: `.sandbox-seeded` records the ref it copied from,
+so pinning or resetting a sandbox to another image seeds it again from that one.
 
 ## Choosing an image
 

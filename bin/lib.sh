@@ -264,12 +264,15 @@ sandbox_seeded_path() {
     printf '%s/.sandbox-seeded\n' "$(sandbox_home_path "$1")"
 }
 
+# The home mount hides whatever the image keeps in its own home, so copy that
+# home into the sandbox once per image. The marker records the ref it copied
+# from, so a sandbox moved to another image is seeded again from that one.
 sandbox_seed_home() {
     local name="$1" ref="$2" image_home="$3" home marker tmp entry copied=0
     home="$(sandbox_home_path "$name")"
     marker="$(sandbox_seeded_path "$name")"
-    if [ -e "$marker" ]; then return 0; fi
-    if [ -z "$image_home" ]; then return 0; fi
+    if [ -z "$ref" ] || [ -z "$image_home" ]; then return 0; fi
+    if [ "$(cat "$marker" 2>/dev/null)" = "$ref" ]; then return 0; fi
 
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/sandbox-seed.XXXXXX")" || return 0
 
@@ -280,7 +283,8 @@ sandbox_seed_home() {
             if [ -e "$home/${entry##*/}" ]; then continue; fi
             cp -R "$entry" "$home/${entry##*/}" && copied=$((copied + 1))
         done < <(find "$tmp" -mindepth 1 -maxdepth 1)
-        : > "$marker"
+        mkdir -p "$(dirname "$marker")"
+        printf '%s\n' "$ref" > "$marker"
         if [ "$copied" -gt 0 ]; then
             echo "Copied $copied item(s) from the image's own home into '$name'."
         fi

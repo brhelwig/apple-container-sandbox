@@ -159,7 +159,7 @@ seed_home() {
     (
         export UNIT_IMAGE_HOME SEED_LOG PATH="$SEEDSTUB:$PATH"
         export SEED_FAILS="${SEED_FAILS:-}"
-        sandbox_seed_home "$1" example/img:1 "${2-/home/dev}"
+        sandbox_seed_home "$1" "${2-example/img:1}" "${3-/home/dev}"
     ) > "$TMP/seedhome.out" 2> "$TMP/seedhome.err"
 }
 
@@ -191,9 +191,23 @@ no '[ -e "$SANDBOX_HOMES/badimage/.zshrc" ]'            'seed home: copies nothi
 unset SEED_FAILS
 
 mkdir -p "$SANDBOX_HOMES/nohome"
-seed_home nohome ""
+seed_home nohome example/img:1 ""
 ok '[ ! -s "$SEED_LOG" ]'                               'seed home: an image that declares no home starts nothing'
 no '[ -e "$SANDBOX_HOMES/nohome/.sandbox-seeded" ]'     'seed home: and is left to try again'
+
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.sandbox-seeded")" = example/img:1 ]' \
+                                                        'seed home: the marker records the ref it copied from'
+printf 'second image only\n' > "$UNIT_IMAGE_HOME/.p10k.zsh"
+seed_home fresh example/img:2
+ok 'grep -q "tar -cf -" "$SEED_LOG"'                    'seed home: another image is seeded again'
+ok '[ -f "$SANDBOX_HOMES/fresh/.p10k.zsh" ]'            'seed home: what the new image adds arrives'
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.zshrc")" = "image zshrc" ]' \
+                                                        'seed home: what the old image left is kept'
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.sandbox-seeded")" = example/img:2 ]' \
+                                                        'seed home: the marker moves to the new ref'
+seed_home fresh example/img:2
+ok '[ ! -s "$SEED_LOG" ]'                               'seed home: and stays put on the ref it holds'
+rm -f "$UNIT_IMAGE_HOME/.p10k.zsh"
 
 mkdir -p "$SANDBOX_HOMES/both"
 printf 'ssh-ed25519 AAAAfourth mac\n' > "$HOSTKEYS/authorized_keys"
