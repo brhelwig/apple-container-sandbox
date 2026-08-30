@@ -36,8 +36,10 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   target is never assumed to be `/home/$USER`, and `sandbox --image
   debian:bookworm plain` works with no configuration at all. The answer is
   remembered per sandbox in `.sandbox-image-facts`.
-- Attaching joins a zellij session named after the sandbox where the image has
-  zellij, and drops into the image's login shell where it does not.
+- Attaching runs the image's login shell and nothing else. It used to start or
+  join a zellij session named after the sandbox wherever the image had zellij,
+  which took over the terminal on every attach. An image that runs zellij in the
+  background still does; `zellij attach` reaches it.
 - `[image].ref` is the only image setting. Everything else about an image comes
   from the image.
 - **A sandbox no longer stops when you leave its shell.** Every launch is

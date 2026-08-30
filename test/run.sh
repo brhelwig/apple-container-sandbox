@@ -467,10 +467,9 @@ ok 'grep -q ":/home/dev$" "$TMP/run.log"'           'arch: picks the variant mat
 no 'grep -q "wrongarch" "$TMP/run.log"'             'arch: ignores the other architecture'
 
 run_launch attachbox
-ok 'grep -q "zellij attach --create attachbox" "$TMP/cmd.log"' \
-                                                    'attach: joins a zellij session named after the sandbox'
-ok 'grep -q "command -v zellij" "$TMP/cmd.log"'     'attach: only where the image has zellij'
-ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: otherwise the shell the image names'
+no 'grep -q zellij "$TMP/cmd.log"'                  'attach: starts no multiplexer of its own'
+ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: runs the shell the image names, as a login shell'
+no 'grep -q -- "-lc" "$TMP/cmd.log"'                'attach: runs no command but the shell'
 IMG_ENV='"HOME=/home/dev"' PROBE_SHELL=/bin/sh run_launch noshell
 ok 'grep -q "/bin/sh -l" "$TMP/cmd.log"'            'attach: asks the image when it names no shell'
 

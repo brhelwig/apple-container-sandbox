@@ -154,8 +154,7 @@ attach() {
 
     container exec --interactive --tty \
         --env "TERM=$(terminfo_for "$name")" \
-        "$name" "$IMAGE_SHELL" -lc \
-        "command -v zellij >/dev/null 2>&1 && exec zellij attach --create $name; exec $IMAGE_SHELL -l" \
+        "$name" "$IMAGE_SHELL" -l \
         || true
 
     if running_now "$name"; then
