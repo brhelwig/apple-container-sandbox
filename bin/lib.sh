@@ -260,6 +260,38 @@ sandbox_authorized_key_count() {
     printf '%s\n' "${count:-0}"
 }
 
+sandbox_seeded_path() {
+    printf '%s/.sandbox-seeded\n' "$(sandbox_home_path "$1")"
+}
+
+sandbox_seed_home() {
+    local name="$1" ref="$2" image_home="$3" home marker tmp entry copied=0
+    home="$(sandbox_home_path "$name")"
+    marker="$(sandbox_seeded_path "$name")"
+    if [ -e "$marker" ]; then return 0; fi
+    if [ -z "$image_home" ]; then return 0; fi
+
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/sandbox-seed.XXXXXX")" || return 0
+
+    if container run --rm --entrypoint sh "$ref" \
+            -c 'cd "$1" && tar -cf - .' sh "$image_home" 2>/dev/null \
+            | tar -xf - -C "$tmp" 2>/dev/null; then
+        while IFS= read -r entry; do
+            if [ -e "$home/${entry##*/}" ]; then continue; fi
+            cp -R "$entry" "$home/${entry##*/}" && copied=$((copied + 1))
+        done < <(find "$tmp" -mindepth 1 -maxdepth 1)
+        : > "$marker"
+        if [ "$copied" -gt 0 ]; then
+            echo "Copied $copied item(s) from the image's own home into '$name'."
+        fi
+    else
+        echo "Could not read $image_home out of $ref. '$name' starts with the home it already has." >&2
+    fi
+
+    rm -rf "$tmp"
+    return 0
+}
+
 sandbox_seed_authorized_keys() {
     local name="$1" dir keys="" pub host_ssh_dir count
     dir="$(sandbox_home_path "$name")/.ssh"

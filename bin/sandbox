@@ -203,6 +203,8 @@ start_container() {
     local name="$1" home="$2"
     local -a ssh_args=()
 
+    sandbox_seed_home "$name" "$IMAGE_REF" "$IMAGE_HOME"
+
     if sandbox_ssh_enabled "$CONFIG"; then
         sandbox_seed_authorized_keys "$name"
         ssh_args=(--publish "$(sandbox_ssh_address "$CONFIG"):$(sandbox_ssh_port "$CONFIG" "$name"):22")

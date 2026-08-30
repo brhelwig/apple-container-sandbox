@@ -5,6 +5,12 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Changed
+- **The first launch copies the image's home into the sandbox home.** Mounting
+  `~/Sandboxes/<name>` as the container's home hid every dotfile the image put
+  there. On the default image that meant no `.zshrc` and no oh-my-zsh, so zsh
+  found no startup file and ran `zsh-newuser-install` instead of dropping you at
+  a prompt. The copy skips anything already in the home, so it never overwrites
+  your files, and it runs once per sandbox, recorded in `.sandbox-seeded`.
 - **Deleting a sandbox deletes the sandbox.** It removed the container and left
   the home dir, and because the menu is built from the directories under
   `~/Sandboxes`, the sandbox stayed in the menu and delete read as doing nothing.

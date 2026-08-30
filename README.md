@@ -53,6 +53,12 @@ home, so auth, config, and shell history persist across image changes and stay
 separate between sandboxes. The container mounts **only** the home dir — drop
 files into `~/Sandboxes/<name>` in Finder.
 
+That mount covers whatever the image left in its own home, so the first launch
+copies the image's home into `~/Sandboxes/<name>` first. Without it a sandbox on
+the default image starts with no `.zshrc` and no oh-my-zsh, and zsh opens its
+new-user setup instead of a shell. A file you already have is never overwritten,
+and the copy runs once per sandbox, recorded in `.sandbox-seeded`.
+
 ## Choosing an image
 
 Every sandbox runs a published OCI image. By default that is
