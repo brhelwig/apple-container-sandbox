@@ -137,6 +137,78 @@ KEYS_AKONLY="$SANDBOX_HOMES/akonly/.ssh/authorized_keys"
 ok 'seed "$AKONLY" akonly'                              'seed: runs with only a host authorized_keys'
 ok 'grep -q AAAAthird "$KEYS_AKONLY"'                   'seed: falls back to the host authorized_keys'
 
+SEEDSTUB="$TMP/seedstub"
+mkdir -p "$SEEDSTUB"
+cat > "$SEEDSTUB/container" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SEED_LOG"
+[ -n "${SEED_FAILS:-}" ] && exit 1
+tar -cf - -C "$UNIT_IMAGE_HOME" .
+STUBEOF
+chmod +x "$SEEDSTUB/container"
+
+UNIT_IMAGE_HOME="$TMP/unit-image-home"
+mkdir -p "$UNIT_IMAGE_HOME/.oh-my-zsh"
+printf 'image zshrc\n' > "$UNIT_IMAGE_HOME/.zshrc"
+printf 'image bashrc\n' > "$UNIT_IMAGE_HOME/.bashrc"
+printf 'themes\n' > "$UNIT_IMAGE_HOME/.oh-my-zsh/themes"
+SEED_LOG="$TMP/seedhome.log"
+
+seed_home() {
+    : > "$SEED_LOG"
+    (
+        export UNIT_IMAGE_HOME SEED_LOG PATH="$SEEDSTUB:$PATH"
+        export SEED_FAILS="${SEED_FAILS:-}"
+        sandbox_seed_home "$1" "${2-example/img:1}" "${3-/home/dev}"
+    ) > "$TMP/seedhome.out" 2> "$TMP/seedhome.err"
+}
+
+mkdir -p "$SANDBOX_HOMES/fresh"
+seed_home fresh
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.zshrc")" = "image zshrc" ]' \
+                                                        'seed home: copies the dotfile the mount would hide'
+ok '[ -f "$SANDBOX_HOMES/fresh/.oh-my-zsh/themes" ]'    'seed home: copies directories whole'
+ok '[ -e "$SANDBOX_HOMES/fresh/.sandbox-seeded" ]'      'seed home: records that it ran'
+ok 'grep -q "Copied 3" "$TMP/seedhome.out"'             'seed home: says how much it copied'
+ok 'grep -q "tar -cf -" "$SEED_LOG"'                    'seed home: reads the home out of the image'
+
+seed_home fresh
+ok '[ ! -s "$SEED_LOG" ]'                               'seed home: starts no container the second time'
+
+mkdir -p "$SANDBOX_HOMES/mine"
+printf 'my own zshrc\n' > "$SANDBOX_HOMES/mine/.zshrc"
+seed_home mine
+ok '[ "$(cat "$SANDBOX_HOMES/mine/.zshrc")" = "my own zshrc" ]' \
+                                                        'seed home: never overwrites a file you already had'
+ok '[ "$(cat "$SANDBOX_HOMES/mine/.bashrc")" = "image bashrc" ]' \
+                                                        'seed home: still fills in what is missing'
+
+mkdir -p "$SANDBOX_HOMES/badimage"
+SEED_FAILS=1 seed_home badimage
+ok 'grep -q "Could not read" "$TMP/seedhome.err"'       'seed home: says so when the image will not give up its home'
+no '[ -e "$SANDBOX_HOMES/badimage/.sandbox-seeded" ]'   'seed home: a failed read is not a seed'
+no '[ -e "$SANDBOX_HOMES/badimage/.zshrc" ]'            'seed home: copies nothing on failure'
+unset SEED_FAILS
+
+mkdir -p "$SANDBOX_HOMES/nohome"
+seed_home nohome example/img:1 ""
+ok '[ ! -s "$SEED_LOG" ]'                               'seed home: an image that declares no home starts nothing'
+no '[ -e "$SANDBOX_HOMES/nohome/.sandbox-seeded" ]'     'seed home: and is left to try again'
+
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.sandbox-seeded")" = example/img:1 ]' \
+                                                        'seed home: the marker records the ref it copied from'
+printf 'second image only\n' > "$UNIT_IMAGE_HOME/.p10k.zsh"
+seed_home fresh example/img:2
+ok 'grep -q "tar -cf -" "$SEED_LOG"'                    'seed home: another image is seeded again'
+ok '[ -f "$SANDBOX_HOMES/fresh/.p10k.zsh" ]'            'seed home: what the new image adds arrives'
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.zshrc")" = "image zshrc" ]' \
+                                                        'seed home: what the old image left is kept'
+ok '[ "$(cat "$SANDBOX_HOMES/fresh/.sandbox-seeded")" = example/img:2 ]' \
+                                                        'seed home: the marker moves to the new ref'
+seed_home fresh example/img:2
+ok '[ ! -s "$SEED_LOG" ]'                               'seed home: and stays put on the ref it holds'
+rm -f "$UNIT_IMAGE_HOME/.p10k.zsh"
+
 mkdir -p "$SANDBOX_HOMES/both"
 printf 'ssh-ed25519 AAAAfourth mac\n' > "$HOSTKEYS/authorized_keys"
 KEYS_BOTH="$SANDBOX_HOMES/both/.ssh/authorized_keys"
@@ -207,8 +279,15 @@ if [ "$1" = exec ]; then
 fi
 case "$1 $2" in
     "run --rm")
-        printf '%s\n%s\n%s\n' "${PROBE_HOME-/home/probed}" \
-            "${PROBE_USER-probeduser}" "${PROBE_SHELL-/bin/probesh}"
+        case " $* " in
+            *" tar -cf - "*)
+                tar -cf - -C "$SEED_SRC" .
+                ;;
+            *)
+                printf '%s\n%s\n%s\n' "${PROBE_HOME-/home/probed}" \
+                    "${PROBE_USER-probeduser}" "${PROBE_SHELL-/bin/probesh}"
+                ;;
+        esac
         ;;
     "image inspect")
         [ -n "${IMG_MISSING:-}" ] && exit 1
@@ -263,11 +342,16 @@ chmod +x "$CSTUB/container" "$CSTUB/gum" "$CSTUB/infocmp"
 
 DEFAULT_IMAGE='ghcr.io/brhelwig/dev-container:latest-arm64'
 
+SEED_SRC="$TMP/imagehome"
+mkdir -p "$SEED_SRC/.oh-my-zsh"
+printf 'source $ZSH/oh-my-zsh.sh\n' > "$SEED_SRC/.zshrc"
+printf 'themes\n' > "$SEED_SRC/.oh-my-zsh/themes"
+
 run_launch() {
     rm -f "$TMP/run.log" "$TMP/cmd.log"
     env RUN_LOG="$TMP/run.log" CMD_LOG="$TMP/cmd.log" \
         SANDBOX_HOMES="$TMP/homes" SANDBOX_TUNNEL_WAIT=0 \
-        SANDBOX_HOST_SSH_DIR="$HOSTKEYS" \
+        SANDBOX_HOST_SSH_DIR="$HOSTKEYS" SEED_SRC="$SEED_SRC" \
         PATH="$CSTUB:$PATH" bash "$REPOCOPY/bin/sandbox" "$@" > "$TMP/out.txt" 2>&1
 }
 
@@ -294,9 +378,14 @@ ok 'grep -q AAAAfirst "$TMP/homes/testbox/.ssh/authorized_keys"' \
 no '[ -e "$TMP/homes/testbox/.sandbox-image" ]'     'launch: pins no image of its own'
 ok '[ "$(sed -n 2p "$TMP/homes/testbox/.sandbox-image-facts")" = /home/dev ]' \
                                                     'launch: records where it mounted'
+ok '[ -f "$TMP/homes/testbox/.zshrc" ]'             'launch: seeds the home the image ships'
+ok 'grep -q oh-my-zsh "$TMP/homes/testbox/.zshrc"'  'launch: with the contents the image put there'
+ok '[ -d "$TMP/homes/testbox/.oh-my-zsh" ]'         'launch: directories included'
+ok 'grep -q "tar -cf -" "$TMP/cmd.log"'             'launch: reads the home out of the image once'
 
 run_launch -d testbox
 ok '[ -s "$TMP/run.log" ]'                          'headless: reaches container run'
+no 'grep -q "tar -cf -" "$TMP/cmd.log"'             'headless: a home already seeded is not seeded again'
 ok 'grep -qx -- "--detach" "$TMP/run.log"'          'headless: detaches'
 no 'grep -q "^exec " "$TMP/cmd.log"'                'headless: attaches nothing'
 ok 'grep -q "Attach a shell" "$TMP/out.txt"'        'headless: says how to get a shell'
@@ -392,10 +481,9 @@ ok 'grep -q ":/home/dev$" "$TMP/run.log"'           'arch: picks the variant mat
 no 'grep -q "wrongarch" "$TMP/run.log"'             'arch: ignores the other architecture'
 
 run_launch attachbox
-ok 'grep -q "zellij attach --create attachbox" "$TMP/cmd.log"' \
-                                                    'attach: joins a zellij session named after the sandbox'
-ok 'grep -q "command -v zellij" "$TMP/cmd.log"'     'attach: only where the image has zellij'
-ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: otherwise the shell the image names'
+no 'grep -q zellij "$TMP/cmd.log"'                  'attach: starts no multiplexer of its own'
+ok 'grep -q "/usr/bin/zsh -l" "$TMP/cmd.log"'       'attach: runs the shell the image names, as a login shell'
+no 'grep -q -- "-lc" "$TMP/cmd.log"'                'attach: runs no command but the shell'
 IMG_ENV='"HOME=/home/dev"' PROBE_SHELL=/bin/sh run_launch noshell
 ok 'grep -q "/bin/sh -l" "$TMP/cmd.log"'            'attach: asks the image when it names no shell'
 

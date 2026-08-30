@@ -5,6 +5,14 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
 ## Unreleased
 
 ### Changed
+- **The first launch copies the image's home into the sandbox home.** Mounting
+  `~/Sandboxes/<name>` as the container's home hid every dotfile the image put
+  there. On the default image that meant no `.zshrc` and no oh-my-zsh, so zsh
+  found no startup file and ran `zsh-newuser-install` instead of dropping you at
+  a prompt. The copy skips anything already in the home, so it never overwrites
+  your files, and it runs once per image: `.sandbox-seeded` records the ref it
+  copied from, so a sandbox pinned or reset to another image is seeded from that
+  one on its next launch.
 - **Deleting a sandbox deletes the sandbox.** It removed the container and left
   the home dir, and because the menu is built from the directories under
   `~/Sandboxes`, the sandbox stayed in the menu and delete read as doing nothing.
@@ -30,8 +38,10 @@ Calendar-versioned (`YY.MM.MICRO`), most recent first.
   target is never assumed to be `/home/$USER`, and `sandbox --image
   debian:bookworm plain` works with no configuration at all. The answer is
   remembered per sandbox in `.sandbox-image-facts`.
-- Attaching joins a zellij session named after the sandbox where the image has
-  zellij, and drops into the image's login shell where it does not.
+- Attaching runs the image's login shell and nothing else. It used to start or
+  join a zellij session named after the sandbox wherever the image had zellij,
+  which took over the terminal on every attach. An image that runs zellij in the
+  background still does; `zellij attach` reaches it.
 - `[image].ref` is the only image setting. Everything else about an image comes
   from the image.
 - **A sandbox no longer stops when you leave its shell.** Every launch is

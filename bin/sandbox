@@ -154,8 +154,7 @@ attach() {
 
     container exec --interactive --tty \
         --env "TERM=$(terminfo_for "$name")" \
-        "$name" "$IMAGE_SHELL" -lc \
-        "command -v zellij >/dev/null 2>&1 && exec zellij attach --create $name; exec $IMAGE_SHELL -l" \
+        "$name" "$IMAGE_SHELL" -l \
         || true
 
     if running_now "$name"; then
@@ -202,6 +201,8 @@ report_tunnel() {
 start_container() {
     local name="$1" home="$2"
     local -a ssh_args=()
+
+    sandbox_seed_home "$name" "$IMAGE_REF" "$IMAGE_HOME"
 
     if sandbox_ssh_enabled "$CONFIG"; then
         sandbox_seed_authorized_keys "$name"
