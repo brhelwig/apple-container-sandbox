@@ -20,7 +20,7 @@ skips the menu and doesn't need `gum` at all.
 ## Usage
 
 ```sh
-sandbox              # menu: launch a sandbox, or stop/rename/delete one
+sandbox              # menu: launch a sandbox, or stop/rename/reset/delete one
 sandbox myproject    # launch "myproject" and attach a shell (creates it if new)
 sandbox -d myproject # launch it without attaching anything
 sandbox --image ghcr.io/you/img:tag myproject   # pin it to an image of its own
@@ -39,10 +39,14 @@ has changed since it started, `sandbox` says so and asks before restarting it,
 because a restart loses everything running inside. Decline, and it attaches to
 what is already there.
 
-Deleting removes the container and nothing else. The home dir at
-`~/Sandboxes/<name>` keeps every file in it, so the sandbox stays in the menu
-and the next launch recreates the container. Delete a home dir yourself when you
-want the files gone.
+Deleting removes the container and puts the home dir at `~/Sandboxes/<name>` in
+the Trash, so the sandbox leaves the menu and its files are still there until you
+empty the Trash. Stopping instead of deleting keeps both, and the next launch
+picks up where you left off.
+
+Resetting a sandbox drops the image ref pinned to it, fetches `[image].ref` from
+the config, and recreates its container on that. The home dir is untouched, so
+this changes what the sandbox runs on and keeps everything you put in it.
 
 Homes live at `~/Sandboxes/<name>` and are mounted as the container's entire
 home, so auth, config, and shell history persist across image changes and stay
@@ -64,7 +68,7 @@ sandbox --image ghcr.io/you/img:tag myproject   # this sandbox, from now on
 ```
 
 The ref is recorded in `~/Sandboxes/myproject/.sandbox-image` and used on every
-later launch. Delete that file to follow the config again.
+later launch. Pick `↺ Reset image…` from the menu to follow the config again.
 
 ```toml
 [image]

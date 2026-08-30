@@ -10,7 +10,7 @@ usage() {
     cat <<EOF
 sandbox — ad-hoc Linux sandboxes on Apple Container
 
-  sandbox                    Open the menu (launch, or stop/rename/delete).
+  sandbox                    Open the menu (launch, or stop/rename/reset/delete).
   sandbox <name>             Launch <name> and attach a shell to it.
   sandbox -d <name>          Launch <name> without attaching anything.
   sandbox --image <ref>      Run <name> on this image from now on.
@@ -25,8 +25,11 @@ the menu or with \`container stop <name>\`.
 Every sandbox runs a published image rather than one built here. It defaults to
 $SANDBOX_DEFAULT_IMAGE, and \`[image].ref\` in
 config.toml changes that for every sandbox. \`--image\` pins one sandbox to a
-ref of its own, recorded in ~/Sandboxes/<name>/.sandbox-image; delete that file
-to follow the config again.
+ref of its own, recorded in ~/Sandboxes/<name>/.sandbox-image; the menu's
+\`Reset image\` entry drops that pin and rebuilds the sandbox on the config ref.
+
+Deleting a sandbox from the menu removes its container and puts
+~/Sandboxes/<name> in the Trash, so its files are recoverable until you empty it.
 
 Every sandbox also serves SSH, on a port of the Mac that is its own, so it can
 be reached from anywhere that reaches the Mac, a tailnet included. The port is
@@ -324,12 +327,28 @@ stop_sandbox() {
 }
 
 delete_sandbox() {
-    local name
-    name="$(list_sandboxes | gum choose --header "Delete which sandbox's container?")" || return 0
+    local name home
+    name="$(list_sandboxes | gum choose --header 'Delete which sandbox?')" || return 0
     [ -n "$name" ] || return 0
-    gum confirm "Delete the '$name' container? Its home dir ($(sandbox_home_path "$name")) is kept." || return 0
+    home="$(sandbox_home_path "$name")"
+    gum confirm "Delete '$name'? Its container goes, and $home goes to the Trash." || return 0
     remove_container "$name"
-    echo "Deleted the '$name' container. Launch '$name' again to recreate it."
+    if ! sandbox_trash "$home"; then
+        echo "Deleted the '$name' container, but could not move $home to the Trash." >&2
+        return 1
+    fi
+    echo "Deleted '$name'. Its home dir is in the Trash until you empty it."
+}
+
+reset_sandbox() {
+    local name headless="${1:-0}" ref
+    name="$(list_sandboxes | gum choose --header 'Reset which sandbox to the config image?')" || return 0
+    [ -n "$name" ] || return 0
+    ref="$(sandbox_config "$CONFIG" image ref "$SANDBOX_DEFAULT_IMAGE")"
+    gum confirm "Reset '$name' onto $ref? Everything running inside it is lost." || return 0
+    rm -f "$(sandbox_image_path "$name")" "$(sandbox_facts_path "$name")"
+    remove_container "$name"
+    launch "$name" "$headless" "" "" 1
 }
 
 rename_sandbox() {
@@ -390,9 +409,10 @@ main() {
     ensure_gum || return 1
 
     local names choice
-    local NEW="＋ New sandbox" STOP="⏹ Stop…" REN="✎ Rename…" DEL="🗑 Delete container…"
+    local NEW="＋ New sandbox" STOP="⏹ Stop…" REN="✎ Rename…"
+    local RESET="↺ Reset image…" DEL="🗑 Delete…"
     names="$(list_sandboxes)"
-    choice="$(printf '%s\n' "$names" "$NEW" "$STOP" "$REN" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
+    choice="$(printf '%s\n' "$names" "$NEW" "$STOP" "$REN" "$RESET" "$DEL" | sed '/^$/d' | gum choose --header 'Sandbox:')" || return 0
 
     case "$choice" in
         "$NEW")
@@ -401,6 +421,7 @@ main() {
             create_and_launch "$name" "$headless" "$ssh_port" "$image" "$pull" ;;
         "$STOP") stop_sandbox ;;
         "$REN") rename_sandbox ;;
+        "$RESET") reset_sandbox "$headless" ;;
         "$DEL") delete_sandbox ;;
         *) launch "$choice" "$headless" "$ssh_port" "$image" "$pull" ;;
     esac
